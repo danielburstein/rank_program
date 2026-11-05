@@ -41,6 +41,7 @@ rankrecovery-server = "rankrecovery.api.main:main"
 rankrecovery-bot = "rankrecovery.bot.main:main"
 rankrecovery-client = "rankrecovery.client.main:main"
 rankrecovery-admin = "rankrecovery.cli:main"
+rankrecovery-stack = "rankrecovery.stack:main"
 
 [tool.setuptools.packages.find]
 include = ["rankrecovery*"]

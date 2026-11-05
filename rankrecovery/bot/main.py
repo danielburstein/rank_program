@@ -87,9 +87,20 @@ async def create_bot(settings: Any, api: RankApiClient, *, load_cogs: bool = Tru
     return bot
 
 
+_current_bot: RankBot | None = None
+
+
+def request_shutdown() -> None:
+    """Ask the running bot to close; call from the bot's event loop (e.g. via call_soon_threadsafe)."""
+    if _current_bot is not None and not _current_bot.is_closed():
+        asyncio.ensure_future(_current_bot.close())
+
+
 async def run(settings: Any) -> None:
+    global _current_bot
     api = RankApiClient(settings.api_base_url, settings.api_key.get_secret_value(), timeout=settings.api_timeout_seconds, upload_timeout=settings.upload_timeout_seconds)
     bot = RankBot(settings, api)
+    _current_bot = bot
     loop = asyncio.get_running_loop()
 
     def _stop(*_: Any) -> None:

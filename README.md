@@ -14,6 +14,10 @@ The system has three parts that share one codebase:
 | **Discord bot** (`rankrecovery-bot`) | the server (or anywhere) | `/rank <name>` for players, `/submit` for staff screenshots, `/link` to bind Discord users to IGNs |
 | **Desktop client** (`rankrecovery-client`) | your Windows PC | bulk screenshot submission, review of all six modes, settings, exports |
 
+Hosting on a Minecraft panel (Bloom Host / Pterodactyl) is covered in
+`docs/BLOOM_HOST.md`: a split server with a Python egg runs `main.py`, which
+starts the API and the bot in one process.
+
 Read `docs/ARCHITECTURE.md` for the design, `docs/FEATURES.md` for what is
 implemented and the known limitations, `docs/DATABASE.md` for the database
 choice, `docs/DEPLOYMENT.md` for the server, `docs/BOT.md` and `docs/CLIENT.md`
