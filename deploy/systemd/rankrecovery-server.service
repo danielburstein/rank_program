@@ -1,0 +1,16 @@
+[Unit]
+Description=Rank Recovery API server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rankrecovery
+WorkingDirectory=/opt/rankrecovery
+EnvironmentFile=/opt/rankrecovery/.env
+ExecStart=/opt/rankrecovery/.venv/bin/rankrecovery-server --host 127.0.0.1 --port 8420
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

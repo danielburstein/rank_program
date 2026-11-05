@@ -1,0 +1,40 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: .env
+    environment:
+      RANKRECOVERY_DATA_DIR: /data
+    volumes:
+      - rankrecovery-data:/data
+      - ./backups:/app/backups
+      - ./exports:/app/exports
+    ports:
+      - "127.0.0.1:8420:8420"   # put a reverse proxy with TLS in front if exposing beyond localhost
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: .env
+    command: ["rankrecovery-bot"]
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  # Optional PostgreSQL for true concurrent writes. Set RANKRECOVERY_DATABASE_URL in .env to use it.
+  # db:
+  #   image: postgres:16
+  #   environment:
+  #     POSTGRES_USER: rank
+  #     POSTGRES_PASSWORD: secret
+  #     POSTGRES_DB: rankrecovery
+  #   volumes:
+  #     - rankrecovery-pg:/var/lib/postgresql/data
+  #   restart: unless-stopped
+
+volumes:
+  rankrecovery-data:
+  # rankrecovery-pg:

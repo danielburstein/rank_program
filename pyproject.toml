@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rankrecovery"
+version = "0.1.0"
+description = "Recover historical Minecraft ranks from screenshots and purchase records; server, Discord bot and desktop client."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "sqlalchemy>=2.0,<3",
+    "alembic>=1.13",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "pillow>=10.3",
+    "imagehash>=4.3",
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+    "httpx>=0.27",
+    "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+server = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "python-multipart>=0.0.9"]
+vision = ["anthropic>=0.50"]
+ocr = ["pytesseract>=0.3.10"]
+ocr-easyocr = ["easyocr>=1.7"]
+bot = ["discord.py>=2.3"]
+client = ["PySide6>=6.6"]
+avif = ["pillow-avif-plugin>=1.4"]
+postgres = ["psycopg[binary]>=3.1"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.4", "mypy>=1.9"]
+all = [
+    "rankrecovery[server,vision,ocr,bot,client,avif,dev]",
+]
+
+[project.scripts]
+rankrecovery-server = "rankrecovery.api.main:main"
+rankrecovery-bot = "rankrecovery.bot.main:main"
+rankrecovery-client = "rankrecovery.client.main:main"
+rankrecovery-admin = "rankrecovery.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rankrecovery*"]
+
+[tool.setuptools.package-data]
+rankrecovery = ["db/migrations/*.py", "db/migrations/versions/*.py", "db/migrations/script.py.mako", "client/*.qss"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"rankrecovery/api/**" = ["B008"]  # FastAPI Depends()/File()/Form() defaults are the framework idiom
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

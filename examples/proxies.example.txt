@@ -1,0 +1,7 @@
+# One proxy per line. Lines starting with # are ignored.
+# Supported forms (credentials are never logged; only host:port appears in records):
+http://proxy1.example.com:8080
+https://proxy2.example.com:8443
+http://user:password@proxy3.example.com:3128
+proxy4.example.com:8080
+proxy5.example.com:8080:user:password
