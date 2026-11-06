@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import cv2
+try:  # optional, see regions.py
+    import cv2
+except ImportError:  # pragma: no cover
+    cv2 = None  # type: ignore[assignment]
 import numpy as np
 from PIL import Image
 

@@ -15,7 +15,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import cv2
+try:  # OpenCV is optional: slim Python images may lack its system libraries.
+    import cv2
+except ImportError:  # pragma: no cover - exercised only on such images
+    cv2 = None  # type: ignore[assignment]
 import numpy as np
 from PIL import Image
 
@@ -361,7 +364,13 @@ def _pad(bbox: BBox, img_w: int, img_h: int, pad_x: int, pad_y: int) -> BBox:
     return (nx, ny, nw, nh)
 
 
+def opencv_available() -> bool:
+    return cv2 is not None
+
+
 def detect_regions(img: Image.Image, *, min_val: int = 150, max_nametags: int = 4) -> list[DetectedRegion]:
+    if cv2 is None:
+        return []  # caller falls back to the model layout call or the full image
     """Detect HUD regions heuristically. Returns an empty list when nothing is found."""
     bgr = pil_to_bgr(img)
     img_h, img_w = bgr.shape[:2]

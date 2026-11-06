@@ -15,7 +15,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-import cv2
+try:  # optional, see imaging/regions.py
+    import cv2
+except ImportError:  # pragma: no cover
+    cv2 = None  # type: ignore[assignment]
 import numpy as np
 from PIL import Image
 
@@ -73,6 +76,8 @@ class TesseractExtractor:
     """TextExtractor implementation using Tesseract through pytesseract."""
 
     def __init__(self, settings: ExtractionSettings, region_detector: Any | None = None) -> None:
+        if cv2 is None:
+            raise ExtractorUnavailable("OpenCV (opencv-python-headless) could not be imported; local OCR needs it")
         try:
             import pytesseract  # noqa: F401
         except ImportError as exc:
