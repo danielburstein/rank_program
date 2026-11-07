@@ -40,6 +40,8 @@ def ctx(tmp_path):
     stub = StubExtractor(rows)
     context = AppContext(db, extractor_factory=lambda _ctx, _o: stub)
     context.stub = stub  # type: ignore[attr-defined]
+    # these scenarios exercise the stricter two-submitter rule, which is off by default
+    context.settings.set("verification.require_two_submitters_above_immortal", True, changed_by="test")
     yield context
     db.dispose()
 

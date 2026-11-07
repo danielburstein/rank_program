@@ -113,7 +113,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "ranks.scuffed_rank": "SCUFFED",
     "ranks.allow_custom_prefix": True,
     # --- verification ---
-    "verification.require_two_submitters_above_immortal": True,
+    "verification.require_two_submitters_above_immortal": False,  # one eligible source confirms any rank; turn on for the stricter rule
     "verification.threshold_rank": DEFAULT_VERIFICATION_THRESHOLD_RANK,
     "verification.required_sources_above_threshold": DEFAULT_REQUIRED_SOURCES_ABOVE_THRESHOLD,
     "verification.per_rank_thresholds": {},  # e.g. {"SCUFFED": 3}

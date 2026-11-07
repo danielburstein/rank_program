@@ -44,7 +44,7 @@ class AppContext:
     def verification_policy(self) -> VerificationPolicy:
         s = self.settings
         return VerificationPolicy(
-            require_independent_submitters=bool(s.get("verification.require_two_submitters_above_immortal", True)),
+            require_independent_submitters=bool(s.get("verification.require_two_submitters_above_immortal", False)),
             threshold_rank=str(s.get("verification.threshold_rank", "IMMORTAL")),
             required_sources_above_threshold=int(s.get("verification.required_sources_above_threshold", 2)),
             per_rank_thresholds={str(k).upper(): int(v) for k, v in (s.get("verification.per_rank_thresholds") or {}).items()},

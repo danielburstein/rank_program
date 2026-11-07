@@ -61,7 +61,9 @@ Mannheim installer on Windows (add it to PATH). AVIF support needs
 
 The **submitter** is the player who *provided* a screenshot, not necessarily the
 player shown in it. Submitters matter because ranks above IMMORTAL need
-screenshots from **two different submitters** (configurable; on by default).
+screenshots from **two different submitters** when the *Require 2 independent
+submitters for ranks above IMMORTAL* checkbox is on (off by default: one clean
+screenshot confirms any rank).
 
 Folder import in the desktop client or CLI expects one subfolder per submitter:
 

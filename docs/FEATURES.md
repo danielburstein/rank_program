@@ -15,7 +15,7 @@
 
 **Reconciliation**
 - All observations kept; summary lists observed ranks (ordered), highest observed, highest confirmed, effective rank, provisional candidates with `n/m` progress, staff ranks, custom prefixes, counts, reasoning.
-- Two-independent-submitter rule above IMMORTAL (checkbox, default on), per-rank thresholds, unknown submitters = one source, duplicate content never adds a source, same image/pass/appearance counted once, IMMORTAL-level fallback for otherwise-eligible single-source high ranks, 0/2 explanations when all evidence is AI/date/confidence-excluded.
+- Two-independent-submitter rule above IMMORTAL (checkbox, default off), per-rank thresholds, unknown submitters = one source, duplicate content never adds a source, same image/pass/appearance counted once, IMMORTAL-level fallback for otherwise-eligible single-source high ranks, 0/2 explanations when all evidence is AI/date/confidence-excluded.
 - Trusted CSV exemption checkbox (default on); CSV rows count as one ordinary source when the exemption is off.
 - Audited waivers (never automatic), manual rank overrides, manual staff assertions, manual verification of detections (parsing reliability only; never adds a source).
 - Flags as rows with severity, details, evidence reference, resolution history; recompute resolves (never deletes) flags that stop applying.

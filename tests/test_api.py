@@ -25,6 +25,7 @@ def client(tmp_path):
     }
     stub = StubExtractor(rows)
     ctx = AppContext(db, extractor_factory=lambda _c, _o: stub)
+    ctx.settings.set("verification.require_two_submitters_above_immortal", True, changed_by="test")
     app = create_app(ctx, job_workers=1)
     admin_key, _ = create_api_key(ctx, name="admin", role=ApiRole.ADMIN)
     bot_key, _ = create_api_key(ctx, name="bot", role=ApiRole.BOT)

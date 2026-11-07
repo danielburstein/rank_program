@@ -30,18 +30,18 @@ def test_migrations_create_schema_and_wal(db):
 
 def test_settings_defaults_history_and_policy_versions(db):
     store = SettingsStore(db)
-    assert store.get("verification.require_two_submitters_above_immortal") is True
-    assert store.set("verification.require_two_submitters_above_immortal", False, changed_by="tester", reason="test") is True
-    assert store.set("verification.require_two_submitters_above_immortal", False) is False  # unchanged
     assert store.get("verification.require_two_submitters_above_immortal") is False
+    assert store.set("verification.require_two_submitters_above_immortal", True, changed_by="tester", reason="test") is True
+    assert store.set("verification.require_two_submitters_above_immortal", True) is False  # unchanged
+    assert store.get("verification.require_two_submitters_above_immortal") is True
     hist = store.history("verification.require_two_submitters_above_immortal")
-    assert hist and hist[0]["old"] is True and hist[0]["new"] is False and hist[0]["changed_by"] == "tester"
+    assert hist and hist[0]["old"] is False and hist[0]["new"] is True and hist[0]["changed_by"] == "tester"
     with db.read_session() as s:
         versions = s.execute(select(PolicyVersion).where(PolicyVersion.kind == "verification")).scalars().all()
-        assert len(versions) == 1 and versions[0].payload["verification.require_two_submitters_above_immortal"] is False
+        assert len(versions) == 1 and versions[0].payload["verification.require_two_submitters_above_immortal"] is True
     # restore defaults
     assert store.reset("verification.require_two_submitters_above_immortal", changed_by="tester")
-    assert store.get("verification.require_two_submitters_above_immortal") is True
+    assert store.get("verification.require_two_submitters_above_immortal") is False
 
 
 def test_secret_setting_masked(db):

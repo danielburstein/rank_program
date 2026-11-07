@@ -28,7 +28,7 @@ or a guild administrator. Commands in DMs are never treated as staff.
 
 Every screenshot is stored with a **submitter**: the player who *provided*
 the screenshot, not necessarily the player shown in it. The server's
-high-rank rule requires screenshots from **two different submitters** for
+high-rank rule (optional, off by default) requires screenshots from **two different submitters** for
 ranks above IMMORTAL, and all images from one submitter count as a single
 source, so the submitter must be recorded truthfully:
 
