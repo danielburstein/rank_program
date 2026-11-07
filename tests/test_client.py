@@ -216,11 +216,11 @@ def test_settings_page_builds_every_key_and_roundtrips(app):
     assert isinstance(page.widgets["verification.require_two_submitters_above_immortal"], QCheckBox)
     assert isinstance(page.widgets["csv.treat_as_confirmed_exempt_from_verification"], QCheckBox)
     assert page.collect() == {}  # nothing changed yet
-    page.widgets["verification.require_two_submitters_above_immortal"].setChecked(False)
+    page.widgets["verification.require_two_submitters_above_immortal"].setChecked(True)
     page.widgets["extraction.vision_concurrency"].setValue(5)
     page.widgets["ai.metadata_indicators"].setPlainText("chatgpt\nopenai")
     changed = page.collect()
-    assert changed["verification.require_two_submitters_above_immortal"] is False
+    assert changed["verification.require_two_submitters_above_immortal"] is True
     assert changed["extraction.vision_concurrency"] == 5
     assert changed["ai.metadata_indicators"] == ["chatgpt", "openai"]
     assert "ranks.player_ranks" not in changed
