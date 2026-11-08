@@ -25,6 +25,22 @@ rankrecovery-admin create-key --name "daniel-desktop" --role admin
 The key is saved in plain text in `~/.rankrecovery/client.json` (owner-only
 file permissions where the OS supports them). Delete that file to forget it.
 
+## macOS
+
+```bash
+brew install python@3.12
+python3.12 -m venv .venv && source .venv/bin/activate && pip install -e ".[client]"
+rankrecovery-client
+```
+
+On macOS older than 14.4 the newest PySide6 refuses to load
+(`Symbol not found: _os_sync_wait_on_address ... built for macOS 14.4`).
+Install the long-term-support Qt instead, which runs on macOS 12 and later:
+
+```bash
+pip install "PySide6>=6.8,<6.9"
+```
+
 ## Submitting screenshots
 
 Use **Submit screenshots**. Either drag files or folders onto the drop area,

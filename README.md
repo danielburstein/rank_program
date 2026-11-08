@@ -52,6 +52,9 @@ Minecraft font (see the limitations).
    ```
 3. Enter the server URL (for example `https://ranks.example.com`) and the API key your server admin created with `rankrecovery-admin create-key --role admin`.
 
+On a Mac, `brew install python@3.12` first; on macOS older than 14.4 also run
+`pip install "PySide6>=6.8,<6.9"` after the install (see `docs/CLIENT.md`).
+
 OCR dependencies are only needed on the **server** (where extraction runs):
 `apt install tesseract-ocr tesseract-ocr-eng` on Debian/Ubuntu, or the UB
 Mannheim installer on Windows (add it to PATH). AVIF support needs
