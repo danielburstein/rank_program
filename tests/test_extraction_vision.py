@@ -145,3 +145,22 @@ def test_wide_crops_are_tiled_and_deduped():
     out = ext.extract(png(400, 50), regions=[region])
     assert len(client.messages.calls) >= 2
     assert len(out.rows) >= 1
+
+
+def test_schemas_avoid_unsupported_array_constraints():
+    import json
+
+    from rankrecovery.extraction.vision import LAYOUT_SCHEMA, ROWS_SCHEMA
+
+    for schema in (ROWS_SCHEMA, LAYOUT_SCHEMA):
+        text = json.dumps(schema)
+        assert "minItems" not in text and "maxItems" not in text
+
+
+def test_bad_bbox_length_is_skipped_not_fatal():
+    import pytest
+
+    from rankrecovery.extraction.vision import _norm_to_px
+
+    with pytest.raises(ValueError):
+        _norm_to_px([1, 2, 3], 100, 100)
