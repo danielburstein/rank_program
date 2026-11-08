@@ -25,6 +25,7 @@ def client(tmp_path):
     }
     stub = StubExtractor(rows)
     ctx = AppContext(db, extractor_factory=lambda _c, _o: stub)
+    ctx.stub = stub  # type: ignore[attr-defined]
     ctx.settings.set("verification.require_two_submitters_above_immortal", True, changed_by="test")
     app = create_app(ctx, job_workers=1)
     admin_key, _ = create_api_key(ctx, name="admin", role=ApiRole.ADMIN)
@@ -144,6 +145,20 @@ def test_csv_preview_and_import_endpoints(client):
     batches = client.get("/api/v1/csv/batches", headers=admin).json()
     rows = client.get(f"/api/v1/csv/batches/{batches[0]['id']}/rows", headers=admin).json()
     assert len(rows) == 2
+
+
+def test_pending_detections_review_flow(client):
+    admin = client.keys["admin"]
+    client.ctx.stub.rows_by_filename["m.png"] = [tab("◇ HER0 ◇ Misread1")]  # type: ignore[attr-defined]
+    out = upload(client, "m.png", 11, "alice", admin)
+    wait_job(client, out["job_id"])
+    pending = client.get("/api/v1/detections/pending", headers=admin).json()
+    assert len(pending) == 1 and pending[0]["username"] == "Misread1" and pending[0]["submitter"] == "alice" and pending[0]["flags"]
+    assert client.get("/api/v1/detections/pending", params={"username": "misread1"}, headers=admin).json()
+    r = client.post(f"/api/v1/detections/{pending[0]['detection_id']}/review", json={"accept": True, "note": "clearly HERO"}, headers=admin)
+    assert r.status_code == 200 and r.json()["player_id"]
+    assert client.get("/api/v1/detections/pending", headers=admin).json() == []
+    assert client.get("/api/v1/players/by-name/Misread1", headers=admin).json()["summary"]["effective_rank"] == "HERO"
 
 
 def test_rescan_endpoints(client):

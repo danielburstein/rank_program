@@ -121,6 +121,25 @@ class RankApiClient:
         result = await self._request("DELETE", f"/discord/link/{discord_user_id}", allow_404=True)
         return result is not None
 
+    async def pending_detections(self, username: str | None = None, *, limit: int = 25) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": limit}
+        if username:
+            params["username"] = username
+        return await self._request("GET", "/detections/pending", params=params)
+
+    async def review_detection(self, detection_id: int, *, accept: bool, note: str) -> dict[str, Any]:
+        return await self._request("POST", f"/detections/{detection_id}/review", json={"accept": accept, "note": note})
+
+    async def image_overlay(self, image_id: int, *, highlight: str | None = None) -> bytes:
+        params = {"highlight": highlight} if highlight else None
+        try:
+            response = await self._client.get(f"/api/v1/images/{image_id}/overlay", params=params, timeout=self._timeout)
+        except httpx.HTTPError as exc:
+            raise ApiError(0, f"transport error: {exc}") from exc
+        if response.status_code >= 400:
+            raise ApiError(response.status_code, response.text[:200])
+        return response.content
+
     async def recompute_player(self, player_id: int) -> dict[str, Any]:
         return await self._request("POST", f"/players/{player_id}/recompute")
 
