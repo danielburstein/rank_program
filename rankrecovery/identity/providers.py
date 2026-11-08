@@ -144,6 +144,13 @@ class HttpJsonProvider:
     # --------------------------------------------------------------- lookup
     def attempt(self, username: str, *, attempt_no: int = 1, proxy: ProxyEntry | None = None) -> tuple[LookupResult, float | None]:
         """One HTTP attempt. Returns (result, retry_after_seconds)."""
+        attempt, data, early, retry_after = self._fetch(username, attempt_no=attempt_no, proxy=proxy)
+        if early is not None:
+            return early, retry_after
+        return self._interpret(username, attempt, data), None
+
+    def _fetch(self, username: str, *, attempt_no: int, proxy: ProxyEntry | None) -> tuple[LookupAttempt, Any, LookupResult | None, float | None]:
+        """Transport + status classification + JSON decoding, shared by every provider."""
         started_wall = datetime.now(UTC)
         started = self._clock()
         url = self.build_url(username)
@@ -158,7 +165,6 @@ class HttpJsonProvider:
             outcome=LookupOutcome.FAILED,
             proxy_id=proxy_id,
         )
-        retry_after: float | None = None
         try:
             client = self._clients.get(proxy.url if proxy else None)
             response = client.get(url)
@@ -166,7 +172,7 @@ class HttpJsonProvider:
             attempt.elapsed_ms = int((self._clock() - started) * 1000)
             attempt.failure_code = classify_exception(exc, via_proxy=proxy is not None)
             attempt.error_message = scrub_credentials(f"{type(exc).__name__}: {exc}")[:500]
-            return self._result(username, attempt, LookupOutcome.FAILED, None, None, attempt.failure_code, attempt.error_message), None
+            return attempt, None, self._result(username, attempt, LookupOutcome.FAILED, None, None, attempt.failure_code, attempt.error_message), None
 
         attempt.elapsed_ms = int((self._clock() - started) * 1000)
         attempt.http_status = response.status_code
@@ -177,26 +183,29 @@ class HttpJsonProvider:
             attempt.failure_code = code
             attempt.response_valid = True
             attempt.error_message = f"documented not-found response (HTTP {response.status_code})"
-            return self._result(username, attempt, outcome, None, None, code, attempt.error_message), None
+            return attempt, None, self._result(username, attempt, outcome, None, None, code, attempt.error_message), None
         if outcome == LookupOutcome.FAILED:
             attempt.failure_code = code
             attempt.error_message = f"HTTP {response.status_code}"
-            if code == F.RATE_LIMITED:
-                retry_after = retry_after_seconds(response)
-            return self._result(username, attempt, outcome, None, None, code, attempt.error_message), retry_after
+            retry_after = retry_after_seconds(response) if code == F.RATE_LIMITED else None
+            return attempt, None, self._result(username, attempt, outcome, None, None, code, attempt.error_message), retry_after
 
         try:
             data = json.loads(response.text) if response.content else None
         except ValueError:
             attempt.failure_code = F.INVALID_RESPONSE
             attempt.error_message = "response body is not valid JSON"
-            return self._result(username, attempt, LookupOutcome.FAILED, None, None, F.INVALID_RESPONSE, attempt.error_message), None
+            return attempt, None, self._result(username, attempt, LookupOutcome.FAILED, None, None, F.INVALID_RESPONSE, attempt.error_message), None
+        return attempt, data, None, None
+
+    def _interpret(self, username: str, attempt: LookupAttempt, data: Any) -> LookupResult:
+        """Turn decoded JSON into a result; providers with other shapes override this."""
         try:
             uuid, name = self.parse_payload(data, username)
         except ProviderPayloadError as exc:
             attempt.failure_code = exc.code
             attempt.error_message = exc.message
-            return self._result(username, attempt, LookupOutcome.FAILED, None, None, exc.code, exc.message), None
+            return self._result(username, attempt, LookupOutcome.FAILED, None, None, exc.code, exc.message)
 
         attempt.response_valid = True
         match_outcome, match_code, message = self.validate_match(username, uuid, name)
@@ -205,13 +214,13 @@ class HttpJsonProvider:
             attempt.resolved_uuid = uuid
             attempt.resolved_name = name
             attempt.error_message = ""
-            return self._result(username, attempt, LookupOutcome.RESOLVED, uuid, name, None, message), None
+            return self._result(username, attempt, LookupOutcome.RESOLVED, uuid, name, None, message)
         attempt.outcome = match_outcome
         attempt.failure_code = match_code
         attempt.error_message = message
         attempt.resolved_uuid = uuid
         attempt.resolved_name = name
-        return self._result(username, attempt, match_outcome, None, name, match_code, message), None
+        return self._result(username, attempt, match_outcome, None, name, match_code, message)
 
     def lookup(self, username: str) -> LookupResult:
         result, _ = self.attempt(username)
@@ -385,6 +394,81 @@ def _json_path(data: Any, path: str) -> Any:
         else:
             return None
     return current
+
+
+LABYNET_PREVIOUS_ACCOUNTS_URL = "https://laby.net/api/search/get-previous-accounts/{name}"
+
+
+class LabyNetHistoricalProvider(HttpJsonProvider):
+    """Historical-name search through laby.net's previous-accounts endpoint.
+
+    laby.net (LabyMod) kept the name-change records Mojang stopped serving in
+    2022. The endpoint used here is the one public laby.net bots call; it is
+    not formally documented, so the URL is a setting and every answer is
+    treated as a candidate, never as proof: one account that previously held
+    the name resolves, several become an ambiguity for manual review.
+    Respect laby.net's terms and keep the request rate low.
+    """
+
+    name = "labynet"
+    supports_historical = True
+    not_found_statuses = frozenset({404})
+
+    def __init__(self, settings: dict[str, Any] | None = None, client_factory: ClientFactory | None = None, clock: Callable[[], float] = time.monotonic) -> None:
+        settings = dict(settings or {})
+        super().__init__(str(settings.get("lookup.labynet_previous_accounts_url") or LABYNET_PREVIOUS_ACCOUNTS_URL), settings=settings, client_factory=client_factory, clock=clock)
+
+    def _interpret(self, username: str, attempt: LookupAttempt, data: Any) -> LookupResult:
+        users: Any = data.get("users") if isinstance(data, dict) else data
+        if users is None and isinstance(data, dict):
+            users = data.get("results")
+        if not isinstance(users, list):
+            attempt.failure_code = F.INVALID_RESPONSE
+            attempt.error_message = "laby.net response has no 'users' list"
+            return self._result(username, attempt, LookupOutcome.FAILED, None, None, F.INVALID_RESPONSE, attempt.error_message)
+        wanted = username.lower()
+        candidates: dict[str, dict[str, Any]] = {}
+        for user in users:
+            if not isinstance(user, dict):
+                continue
+            uuid = normalise_uuid(str(user.get("uuid") or user.get("id") or ""))
+            if uuid is None:
+                continue
+            current = str(user.get("userName") or user.get("user_name") or user.get("name") or "")
+            changed_at: str | None = None
+            held = current.lower() == wanted
+            for entry in user.get("history") or user.get("name_history") or []:
+                if not isinstance(entry, dict):
+                    continue
+                hist_name = str(entry.get("userName") or entry.get("user_name") or entry.get("name") or "")
+                if hist_name.lower() == wanted:
+                    held = True
+                    changed_at = str(entry.get("updatedAt") or entry.get("changed_at") or "") or changed_at
+            if not held:
+                continue
+            candidates[uuid] = {"uuid": uuid, "current_name": current, "matched_name": username, "changed_at": changed_at, "source": self.name}
+        attempt.response_valid = True
+        if not candidates:
+            attempt.outcome = LookupOutcome.NOT_FOUND
+            attempt.failure_code = F.NOT_FOUND
+            attempt.error_message = "laby.net has no record of an account that used this name"
+            return self._result(username, attempt, LookupOutcome.NOT_FOUND, None, None, F.NOT_FOUND, attempt.error_message)
+        if len(candidates) == 1:
+            cand = next(iter(candidates.values()))
+            attempt.outcome = LookupOutcome.RESOLVED
+            attempt.resolved_uuid = cand["uuid"]
+            attempt.resolved_name = cand["current_name"]
+            attempt.error_message = ""
+            message = f"laby.net: the account now named {cand['current_name']!r} previously used {username!r}" + (f" (record dated {cand['changed_at']})" if cand["changed_at"] else "")
+            result = self._result(username, attempt, LookupOutcome.RESOLVED, cand["uuid"], cand["current_name"], None, message)
+            result.candidates = [cand]
+            return result
+        attempt.failure_code = F.AMBIGUOUS_IDENTITY
+        summary = "; ".join(f"{c['uuid']} (now {c['current_name'] or '?'})" for c in candidates.values())
+        attempt.error_message = f"{len(candidates)} accounts previously used {username!r}: {summary}"[:500]
+        result = self._result(username, attempt, LookupOutcome.FAILED, None, None, F.AMBIGUOUS_IDENTITY, attempt.error_message)
+        result.candidates = list(candidates.values())
+        return result
 
 
 class ConfigurableJsonProvider(HttpJsonProvider):

@@ -41,6 +41,7 @@ class LookupResult:
     attempts: list[LookupAttempt] = field(default_factory=list)
     is_historical: bool = False  # True only when a historical-name provider matched the old name
     cached: bool = False
+    candidates: list[dict] = field(default_factory=list)  # ambiguous matches: {uuid, current_name, changed_at, source}
 
     @property
     def resolved(self) -> bool:

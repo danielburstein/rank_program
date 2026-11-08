@@ -119,6 +119,7 @@ for the list; the most useful ones:
 | `image <id>` | runs, detections and flags of one screenshot |
 | `settings get/set/list` | read or change any setting (policy keys queue a recompute) |
 | `key create <name> <role>` / `keys` / `key revoke <id>` | API keys without curl |
+| `settings set lookup.historical_provider labynet` then `lookup` | resolve old names through laby.net's previous-accounts search; ambiguous players are listed in `players` with the IDENTITY_AMBIGUOUS flag |
 | `export preview`, `backup`, `logs 50 warning`, `stop` | |
 
 ## 9. Applying the export

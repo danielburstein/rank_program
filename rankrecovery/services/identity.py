@@ -224,6 +224,15 @@ class IdentityService:
                 player.identity_status = IdentityStatus.UNRESOLVED.value
                 flags.append(FlagInstance("UUID_LOOKUP_HISTORICAL_NAME_UNRESOLVED", f"{name}: {result.message or 'no current account with this name'}"))
                 s.add(IdentityResolution(player_id=player_id, uuid=None, status=IdentityStatus.UNRESOLVED.value, source=result.provider, queried_name=name, lookup_attempt_id=last_attempt, note=result.message))
+            elif result.failure_code == "UUID_LOOKUP_AMBIGUOUS_IDENTITY":
+                player.identity_status = IdentityStatus.AMBIGUOUS.value
+                for old in s.execute(select(IdentityResolution).where(IdentityResolution.player_id == player_id, IdentityResolution.is_active.is_(True))).scalars():
+                    old.is_active = False
+                for cand in result.candidates:
+                    note = f"candidate from {cand.get('source', result.provider)}: now named {cand.get('current_name') or '?'}" + (" (current holder of the name)" if cand.get("current_holder") else "") + (f", record dated {cand['changed_at']}" if cand.get("changed_at") else "")
+                    s.add(IdentityResolution(player_id=player_id, uuid=cand.get("uuid"), status=IdentityStatus.AMBIGUOUS.value, source=str(cand.get("source") or result.provider), queried_name=name, current_name=cand.get("current_name"), lookup_attempt_id=last_attempt, note=note))
+                flags.append(FlagInstance("UUID_LOOKUP_AMBIGUOUS_IDENTITY", f"{name}: {result.message}"[:1000]))
+                flags.append(FlagInstance("IDENTITY_AMBIGUOUS", f"{len(result.candidates)} candidate accounts; set the UUID manually after review"))
             elif result.outcome == LookupOutcome.SKIPPED:
                 if player.is_bedrock:
                     player.identity_status = IdentityStatus.BEDROCK_PENDING.value

@@ -161,7 +161,9 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "lookup.bedrock_provider": "geyser",
     "lookup.geyser_url": "https://api.geysermc.org/v2/utils/uuid/bedrock_or_java/{name}?prefix={prefix}",
     "lookup.bedrock_prefix": ".",
-    "lookup.historical_provider": "none",  # none | custom (a documented third-party service you are entitled to use)
+    "lookup.historical_provider": "none",  # none | labynet | custom
+    "lookup.labynet_previous_accounts_url": "https://laby.net/api/search/get-previous-accounts/{name}",
+    "lookup.labynet_requests_per_minute": 30,
     "lookup.historical_url": "",
     "lookup.historical_uuid_path": "uuid",
     "lookup.historical_name_path": "name",

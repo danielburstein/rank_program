@@ -23,6 +23,7 @@ from rankrecovery.identity.providers import (
     ClientFactory,
     ConfigurableJsonProvider,
     GeyserBedrockProvider,
+    LabyNetHistoricalProvider,
     ManualProvider,
     MinecraftServicesProvider,
     MojangProvider,
@@ -50,7 +51,7 @@ class LookupService:
         self.settings = dict(settings)
         self.providers = providers
         self.proxy_pool = proxy_pool or ProxyPool(mode="direct")
-        self.rate_limiter = rate_limiter or RateLimiter(float(self.settings.get("lookup.requests_per_minute", 100)), clock=clock, sleep=sleep)
+        self.rate_limiter = rate_limiter or RateLimiter(float(self.settings.get("lookup.requests_per_minute", 100)), per_provider=_per_provider_rates(self.settings), clock=clock, sleep=sleep)
         self.cache = cache if cache is not None else {}
         self._cache_lock = threading.Lock()
         self._clock = clock
@@ -142,28 +143,62 @@ class LookupService:
             return self._resolve_with(provider, username, force=force, cancel=cancel)
 
         provider = self.java_provider()
-        result = self._resolve_with(provider, username, force=force, cancel=cancel)
-        if result.outcome != LookupOutcome.NOT_FOUND:
-            return result
-
+        current = self._resolve_with(provider, username, force=force, cancel=cancel)
         historical = self.historical_provider()
         if historical is None:
-            return replace(
-                result,
-                failure_code=F.HISTORICAL_NAME_UNRESOLVED,
-                message=(
-                    f"no current account named {username!r} ({result.provider} reported not-found); "
-                    "historical username resolution is unsupported, manual identity matching required"
-                ),
-            )
+            if current.outcome == LookupOutcome.NOT_FOUND:
+                return replace(
+                    current,
+                    failure_code=F.HISTORICAL_NAME_UNRESOLVED,
+                    message=(
+                        f"no current account named {username!r} ({current.provider} reported not-found); "
+                        "historical username resolution is unsupported, manual identity matching required"
+                    ),
+                )
+            return current
+        if current.outcome in (LookupOutcome.FAILED, LookupOutcome.SKIPPED):
+            return current  # technical failure: retry later rather than guess from history alone
         hist = self._resolve_with(historical, username, force=force, cancel=cancel)
-        hist.attempts = list(result.attempts) + list(hist.attempts)
-        if hist.outcome == LookupOutcome.RESOLVED:
-            hist.is_historical = True
-            return hist
-        if hist.outcome == LookupOutcome.NOT_FOUND:
-            return replace(hist, failure_code=F.HISTORICAL_NAME_UNRESOLVED, message=f"neither current-name nor historical provider resolved {username!r}")
-        return hist
+        return self._combine(username, current, hist)
+
+    @staticmethod
+    def _combine(username: str, current: LookupResult, hist: LookupResult) -> LookupResult:
+        """Merge the current-name owner with the accounts that previously held the name.
+
+        Names can be reused, so a current owner and a previous holder may be
+        different people. Agreement resolves; disagreement or several previous
+        holders become an ambiguity that a person must settle.
+        """
+        attempts = list(current.attempts) + list(hist.attempts)
+        current_uuid = current.uuid if current.outcome == LookupOutcome.RESOLVED else None
+        hist_candidates = list(hist.candidates) if hist.candidates else ([{"uuid": hist.uuid, "current_name": hist.current_name, "matched_name": username, "changed_at": None, "source": hist.provider}] if hist.outcome == LookupOutcome.RESOLVED and hist.uuid else [])
+        candidates: dict[str, dict] = {c["uuid"]: dict(c) for c in hist_candidates if c.get("uuid")}
+        if current_uuid:
+            candidates.setdefault(current_uuid, {"uuid": current_uuid, "current_name": current.current_name, "matched_name": username, "changed_at": None, "source": current.provider})
+            candidates[current_uuid]["current_holder"] = True
+
+        if hist.outcome == LookupOutcome.FAILED and hist.failure_code != F.AMBIGUOUS_IDENTITY:
+            # history check failed technically: keep the current-name answer, say the check did not happen
+            if current_uuid:
+                return replace(current, attempts=attempts, message=f"{current.message}; historical check via {hist.provider} failed ({hist.failure_code})")
+            return replace(hist, attempts=attempts)
+
+        if len(candidates) == 1:
+            cand = next(iter(candidates.values()))
+            historical_match = hist.outcome == LookupOutcome.RESOLVED
+            if historical_match and current_uuid:
+                message = f"current owner and {hist.provider} history agree: {cand['current_name']!r} held {username!r}"
+            elif historical_match:
+                message = hist.message
+            else:
+                message = f"{current.message}; {hist.provider} has no record of a previous holder"
+            return LookupResult(queried_name=username, provider=hist.provider if historical_match else current.provider, outcome=LookupOutcome.RESOLVED, uuid=cand["uuid"], current_name=cand.get("current_name") or current.current_name, message=message, attempts=attempts, is_historical=historical_match, candidates=[cand])
+
+        if len(candidates) > 1:
+            summary = "; ".join(f"{c['uuid']} (now {c.get('current_name') or '?'}{', current holder' if c.get('current_holder') else ''})" for c in candidates.values())
+            return LookupResult(queried_name=username, provider=hist.provider, outcome=LookupOutcome.FAILED, failure_code=F.AMBIGUOUS_IDENTITY, message=f"{len(candidates)} accounts have used {username!r}; choose one manually: {summary}", attempts=attempts, candidates=list(candidates.values()))
+
+        return LookupResult(queried_name=username, provider=current.provider, outcome=LookupOutcome.NOT_FOUND, failure_code=F.HISTORICAL_NAME_UNRESOLVED, message=f"no current account named {username!r} and {hist.provider} has no record of a previous holder", attempts=attempts)
 
     def _resolve_with(self, provider: Any, username: str, *, force: bool, cancel: threading.Event | None) -> LookupResult:
         name = getattr(provider, "name", "provider")
@@ -314,6 +349,10 @@ class LookupService:
 
 
 # -------------------------------------------------------------------- builders
+def _per_provider_rates(settings: dict[str, Any]) -> dict[str, float]:
+    return {"labynet": float(settings.get("lookup.labynet_requests_per_minute", 30))}
+
+
 def build_default_providers(settings: dict[str, Any], client_factory: ClientFactory | None = None) -> dict[str, Any]:
     providers: dict[str, Any] = {
         "mojang": MojangProvider(settings, client_factory=client_factory),
@@ -321,6 +360,7 @@ def build_default_providers(settings: dict[str, Any], client_factory: ClientFact
         "geyser": GeyserBedrockProvider(settings, client_factory=client_factory),
         "manual": ManualProvider(),
         "none": NoHistoricalProvider(),
+        "labynet": LabyNetHistoricalProvider(settings, client_factory=client_factory),
     }
     historical = str(settings.get("lookup.historical_provider", "none"))
     if historical == "custom":
@@ -352,6 +392,6 @@ def build_lookup_service(
     if mode != "direct" and not parsed.entries:
         mode = "direct"
     pool = ProxyPool(parsed.entries, mode=mode, failure_threshold=int(settings.get("lookup.proxy_failure_threshold", 3)), clock=clock)
-    limiter = RateLimiter(float(settings.get("lookup.requests_per_minute", 100)), clock=clock, sleep=sleep)
+    limiter = RateLimiter(float(settings.get("lookup.requests_per_minute", 100)), per_provider=_per_provider_rates(settings), clock=clock, sleep=sleep)
     providers = build_default_providers(settings, client_factory=client_factory)
     return LookupService(settings, providers, pool, limiter, cache, clock=clock, sleep=sleep)
