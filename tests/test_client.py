@@ -256,7 +256,7 @@ def test_settings_page_builds_every_key_and_roundtrips(app):
     assert changed["ai.metadata_indicators"] == ["chatgpt", "openai"]
     assert "ranks.player_ranks" not in changed
     ranks = page.widgets["ranks.player_ranks"].value()
-    assert [r["name"] for r in ranks][:2] == ["DEFAULT", "HERO"] and ranks[1]["aliases"] == ["NOVA"]
+    assert [r["name"] for r in ranks][:2] == ["DEFAULT", "HERO"] and ranks[1]["aliases"] == ["NOVA", "GLOBAL"]
     assert page.widgets["ranks.mapping"].value()["SCUFFED"] == "Warlord"
     page.widgets["ranks.mapping"].table.item(0, 1).setText("")  # DEFAULT stays unmapped
     assert "DEFAULT" not in page.widgets["ranks.mapping"].value()
