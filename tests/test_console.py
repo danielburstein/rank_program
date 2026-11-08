@@ -45,6 +45,8 @@ def test_console_commands(tmp_path):
         assert "set to claude-sonnet-5-5" in console.run("vision model claude-sonnet-5-5")
         assert "no Anthropic API key" in console.run("vision test")
         assert "command(s)" in console.run("export preview")
+        assert "no lookup attempts" in console.run("lookups Player123")
+        assert "no such player" in console.run("lookups Nobody")
         assert "could not parse" in console.run('player "unterminated')
     finally:
         runner.stop()

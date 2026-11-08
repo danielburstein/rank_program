@@ -48,6 +48,7 @@ class AdminConsole:
             "convert": (self.cmd_convert, "run Mode 2 conversion"),
             "lookup": (self.cmd_lookup, "lookup [--retry-failed] [--all] [--force]: queue UUID lookups (--all re-checks resolved players too, --force ignores the cache)"),
             "players": (self.cmd_players, "players [search]: list players"),
+            "lookups": (self.cmd_lookups, "lookups <name> [n]: recent UUID lookup attempts for a player, with status, failure code and the raw response excerpt"),
             "player": (self.cmd_player, "player <name>: full summary for one player"),
             "images": (self.cmd_images, "images [n]: recent images"),
             "image": (self.cmd_image, "image <id>: detections and runs for one image"),
@@ -212,6 +213,31 @@ class AdminConsole:
             lines.append(f"new rank {d['conversion']['new_rank']} included={d['conversion']['included']} {'; '.join(d['conversion']['reasons'])}".rstrip())
         lines.append(f"stale={s['stale']} · flags: {', '.join(f['code'] for f in d['flags'] if f['is_active']) or 'none'}")
         return "\n".join(lines)
+
+    def cmd_lookups(self, args: list[str]) -> str:
+        if not args:
+            return "usage: lookups <name> [n]"
+        from sqlalchemy import select
+
+        from rankrecovery.db.models import LookupAttemptRow
+        from rankrecovery.services.players import find_player_by_username
+
+        n = int(args[1]) if len(args) > 1 and args[1].isdigit() else 10
+        with self.ctx.db.read_session() as s:
+            player = find_player_by_username(s, args[0])
+            if player is None:
+                return "no such player"
+            rows = s.execute(select(LookupAttemptRow).where(LookupAttemptRow.player_id == player.id).order_by(LookupAttemptRow.id.desc()).limit(n)).scalars().all()
+            if not rows:
+                return "no lookup attempts recorded"
+            lines = []
+            for r in rows:
+                lines.append(f"#{r.id} {r.started_at.strftime('%H:%M:%S') if r.started_at else '?'} {r.provider} {r.queried_name} -> HTTP {r.http_status} {r.outcome} {r.failure_code or ''} {r.error_message or ''}".rstrip())
+                if r.raw_excerpt:
+                    lines.append(f"     body: {r.raw_excerpt}")
+                if r.resolved_uuid:
+                    lines.append(f"     uuid: {r.resolved_uuid} name: {r.resolved_name}")
+            return "\n".join(lines)
 
     def cmd_images(self, args: list[str]) -> str:
         from sqlalchemy import select
