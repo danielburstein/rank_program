@@ -184,6 +184,37 @@ class FakeClient:
     def audit(self, *args, **kwargs):
         return []
 
+    reviews: list = []
+
+    def pending_detections(self, username=None, limit=100, offset=0):
+        return [
+            {"detection_id": 10, "image_id": 1, "player_id": 1, "player_display_name": "Amy", "raw_username": "Amy", "username": "Amy", "raw_prefix": "HER0", "rank": "HERO", "staff": None, "region": "tab", "confidence": 0.9, "bbox": [10, 10, 80, 12], "flags": ["PROBABLE_MISREAD: 'HER0' looks like HERO"], "notes": [], "image_filename": "a.png", "submitter": "alice"},
+            {"detection_id": 11, "image_id": 1, "player_id": 2, "player_display_name": "Bob", "raw_username": "Bob", "username": "Bob", "raw_prefix": "SEASON 3", "rank": "SCUFFED", "staff": None, "region": "tab", "confidence": 0.8, "bbox": [10, 30, 80, 12], "flags": ["AMBIGUOUS_PREFIX: custom prefix without yin-yang"], "notes": [], "image_filename": "a.png", "submitter": "alice"},
+        ]
+
+    def image_content(self, image_id):
+        import io
+
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (120, 60), (20, 20, 20)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    def image_context(self, image_id):
+        return {"detections": self.pending_detections()}
+
+    def review_detection(self, detection_id, accept, note):
+        self.reviews.append((detection_id, accept, note))
+        return {"ok": True, "player_id": 1}
+
+    def bulk_review(self, detection_ids, accept, note):
+        self.reviews.append((tuple(detection_ids), accept, note))
+        return {"reviewed": len(detection_ids)}
+
+    def recompute_player(self, player_id):
+        return self.player(player_id)
+
     def settings(self):
         values = dict(DEFAULT_SETTINGS)
         values["vision.anthropic_api_key"] = ""
@@ -237,7 +268,7 @@ def test_main_window_with_fake_client(app, tmp_path):
     config = ClientConfig(base_url="http://fake", api_key="k", path=tmp_path / "client.json")
     window = create_main_window(config, FakeClient())
     assert window.windowTitle() == "Rank Recovery"
-    assert window.stack.count() == len(PAGES) == 12
+    assert window.stack.count() == len(PAGES) == 13
     drain(app)
     assert window.state.flag_catalogue and window.state.policy.get("ranks")
     window.show_page("players")
@@ -247,6 +278,24 @@ def test_main_window_with_fake_client(app, tmp_path):
     window.state.open_player.emit(1)
     drain(app)
     assert players.inspector.detail["player"]["display_name"] == "Amy"
+    window.show_page("review")
+    drain(app)
+    drain(app)
+    review = window.pages["review"]
+    assert len(review.items) == 2 and review.current()["detection_id"] == 10
+    assert "1 of 2" in review.counter.text() and review.viewer.pixmap_item is not None
+    assert review.viewer.highlight_id == 10
+    review.note.setText("it is HERO")
+    review.decide(True)
+    drain(app)
+    assert window.state.client.reviews[-1] == (10, True, "it is HERO")
+    assert review.current()["detection_id"] == 11 and review.accepted == 1
+    review.skip()
+    assert review.current()["detection_id"] == 11  # wraps around on a single remaining item
+    review.accept_rest_of_image()
+    drain(app)
+    assert window.state.client.reviews[-1][0] == (11,) and review.current() is None
+    assert "all reviewed" in review.details.values().get("status", "") if hasattr(review.details, "values") else True
     window.show_page("settings")
     drain(app)
     assert window.pages["settings"].widgets

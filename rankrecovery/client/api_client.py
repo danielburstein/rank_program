@@ -223,6 +223,9 @@ class ServerClient:
         return self.get("/batches", limit=limit)
 
     # --------------------------------------------------------------- review
+    def pending_detections(self, username: str | None = None, limit: int = 100, offset: int = 0) -> list[dict]:
+        return self.get("/detections/pending", username=username, limit=limit, offset=offset)
+
     def review_detection(self, detection_id: int, accept: bool, note: str) -> dict:
         return self.post(f"/detections/{detection_id}/review", {"accept": accept, "note": note})
 

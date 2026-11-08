@@ -31,6 +31,7 @@ PAGES: list[tuple[str, str, str]] = [
     ("dashboard", "Dashboard", "rankrecovery.client.pages.dashboard:DashboardPage"),
     ("submit", "Submit screenshots", "rankrecovery.client.pages.submit:SubmitPage"),
     ("players", "Mode 1 · Players", "rankrecovery.client.pages.players:PlayersPage"),
+    ("review", "Review queue", "rankrecovery.client.pages.review:ReviewPage"),
     ("images", "Screenshots", "rankrecovery.client.pages.images:ImagesPage"),
     ("csv", "Trusted CSV", "rankrecovery.client.pages.csv_page:CsvPage"),
     ("conversion", "Mode 2 · Conversion", "rankrecovery.client.pages.conversion:ConversionPage"),

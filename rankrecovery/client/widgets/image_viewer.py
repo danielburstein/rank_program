@@ -111,6 +111,7 @@ class ImageViewer(QWidget):
         self.pixmap_item: QGraphicsPixmapItem | None = None
         self.detections: list[dict] = []
         self.highlight: str | None = None
+        self.highlight_id: int | None = None
         self.original: bytes | None = None
         self.overlay: bytes | None = None
         self.showing_overlay = False
@@ -194,7 +195,7 @@ class ImageViewer(QWidget):
                 continue
             colour = _colour_for(d)
             width = 2
-            if highlight and (d.get("username") or "").lower() == highlight:
+            if (highlight and (d.get("username") or "").lower() == highlight) or (self.highlight_id is not None and d.get("detection_id") == self.highlight_id):
                 colour = QColor(ACCENT)
                 width = 4
             rect = QGraphicsRectItem(QRectF(bbox[0], bbox[1], bbox[2], bbox[3]))
@@ -214,6 +215,28 @@ class ImageViewer(QWidget):
     def set_highlight(self, username: str | None) -> None:
         self.highlight = username
         self._redraw_boxes()
+
+    def highlight_detection(self, detection_id: int | None) -> None:
+        self.highlight_id = detection_id
+        self._redraw_boxes()
+
+    def zoom_to(self, bbox: list[int] | tuple[int, ...], *, padding: float = 1.0, max_scale: float = 3.0) -> None:
+        """Zoom so the box (plus some rows of context around it) fills the view, capped at max_scale."""
+        if self.pixmap_item is None or not bbox or len(bbox) != 4:
+            return
+        x, y, w, h = (float(v) for v in bbox)
+        scene = self.scene.sceneRect()
+        rect = QRectF(x - w * padding * 0.5, y - h * padding * 2, w * (1 + padding), h * (1 + padding * 4)).intersected(scene)
+        if rect.isEmpty():
+            return
+        self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        scale = self.view.transform().m11()
+        if scale > max_scale:
+            self.view.resetTransform()
+            self.view.scale(max_scale, max_scale)
+            self.view.centerOn(rect.center())
+            scale = max_scale
+        self.view.zoom = scale
 
     def set_detections(self, detections: list[dict]) -> None:
         self.detections = detections

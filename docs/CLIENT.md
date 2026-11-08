@@ -64,6 +64,19 @@ Uploads go up in groups of ten files; identical content is detected by hash
 and never processed twice. *Extract after upload* starts the extraction job
 on the server and the page follows its progress.
 
+## Review queue
+
+**Review queue** walks through every detection that is waiting for a human
+decision, one at a time: the screenshot is zoomed to that row with the
+detection outlined, the panel on the right shows what was read (prefix,
+username, the rank it maps to, confidence, submitter) and why it needs
+review (probable misread, custom prefix without a yin-yang icon, low
+confidence). Accept (Ctrl+Enter), Reject (Ctrl+Backspace) or Skip
+(Ctrl+Right); the note field is stored with every decision. "Accept all
+remaining on this screenshot" clears a whole image at once. Each decision
+recomputes the player immediately, so Discord `/rank` reflects it right
+away. Type a name in the filter box to review one player only.
+
 ## The six modes
 
 * **Mode 1 · Players** – the main table (every column the migration needs,
