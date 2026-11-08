@@ -301,6 +301,38 @@ def test_search_and_rescan_manual_correction(ctx):
     assert any(x["manual"] for x in ctxinfo["detections"]) and any(x["partial"] for x in ctxinfo["detections"])  # original kept
 
 
+def test_reparse_applies_new_alias_without_reextraction(ctx):
+    ctx.stub.rows_by_filename["g.png"] = [tab("◇ Global ◇ Sushi410"), tab("◇ Zonk ◇ Other1")]
+    g = ImageService(ctx).import_bytes(png_bytes(21), filename="g.png", submitter_name="booga").image_id
+    # GLOBAL is a default alias now; make it unknown first to simulate the original situation
+    ranks = [dict(r) for r in ctx.settings.get("ranks.player_ranks")]
+    for r in ranks:
+        r["aliases"] = [a for a in r.get("aliases", []) if a != "GLOBAL"]
+    ctx.settings.set("ranks.player_ranks", ranks, changed_by="t")
+    ExtractionService(ctx).extract_image(g)
+    view = PlayerViewService(ctx)
+    ReconcileService(ctx).recompute_player(view.lookup_by_name("Sushi410")["player"]["player_id"])
+    d = view.lookup_by_name("Sushi410")
+    assert d["summary"]["effective_rank"] is None and d["detections"][0]["custom_prefix"] == "GLOBAL" and d["detections"][0]["needs_review"]
+    # reject the other custom prefix by hand so the re-parse must leave it alone
+    other = view.lookup_by_name("Other1")
+    ReviewService(ctx).review_detection(other["detections"][0]["detection_id"], accept=False, actor="daniel", note="not a prefix")
+    calls_before = ctx.stub.calls
+    for r in ranks:
+        if r["name"] == "HERO":
+            r["aliases"].append("GLOBAL")
+    ctx.settings.set("ranks.player_ranks", ranks, changed_by="t")
+    counts = ExtractionService(ctx).reparse_detections()
+    assert ctx.stub.calls == calls_before  # no extraction happened
+    assert counts["changed"] == 1 and counts["skipped_reviewed"] == 1
+    ReconcileService(ctx).recompute_player(d["player"]["player_id"])
+    d = view.lookup_by_name("Sushi410")
+    det = d["detections"][0]
+    assert det["rank"] == "HERO" and det["custom_prefix"] is None and not det["needs_review"] and det["raw_prefix"] == "Global"
+    assert d["summary"]["effective_rank"] == "HERO" and d["summary"]["observed_ranks"] == ["HERO"]
+    assert view.lookup_by_name("Other1")["detections"][0]["status"] == "rejected"
+
+
 def test_job_runner_extracts_and_recomputes(ctx):
     import_all(ctx)
     runner = JobRunner(ctx, workers=1)

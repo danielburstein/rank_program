@@ -45,6 +45,9 @@ class AdminConsole:
             "cancel": (self.cmd_cancel, "cancel <job id>"),
             "extract": (self.cmd_extract, "extract [--force] [vision|ocr]: queue extraction of pending (or all) images"),
             "recompute": (self.cmd_recompute, "recompute [all]: recompute stale (or all) player summaries"),
+            "reparse": (self.cmd_reparse, "re-classify stored readings under the current rank list (after alias/rank changes), then recompute"),
+            "alias": (self.cmd_alias, "alias add <RANK> <ALIAS> | alias remove <RANK> <ALIAS> | alias list: seasonal rank aliases (GLOBAL -> HERO)"),
+            "staff-alias": (self.cmd_staff_alias, "staff-alias add <STAFF> <ALIAS> | staff-alias remove <STAFF> <ALIAS>"),
             "convert": (self.cmd_convert, "run Mode 2 conversion"),
             "lookup": (self.cmd_lookup, "lookup [--retry-failed] [--all] [--force]: queue UUID lookups (--all re-checks resolved players too, --force ignores the cache)"),
             "players": (self.cmd_players, "players [search]: list players"),
@@ -179,6 +182,66 @@ class AdminConsole:
     def cmd_recompute(self, args: list[str]) -> str:
         job_id = self.runner.submit("recompute_players", {"all": bool(args and args[0] == "all")}, label="console recompute", created_by="console")
         return f"queued job #{job_id}"
+
+    def cmd_reparse(self, args: list[str]) -> str:
+        job_id = self.runner.submit("reparse_detections", {"all": True}, label="console reparse", created_by="console")
+        return f"queued job #{job_id} (re-parse stored readings, then recompute every player)"
+
+    def cmd_alias(self, args: list[str]) -> str:
+        from rankrecovery.core.ranks import PolicyError, RankPolicy
+        from rankrecovery.core.text import normalise_prefix_text
+
+        ranks = [dict(r) for r in self.ctx.settings.get("ranks.player_ranks")]
+        if args and args[0] == "list":
+            return "\n".join(f"{r['name']}: {', '.join(r.get('aliases') or []) or '-'}" for r in ranks)
+        if len(args) != 3 or args[0] not in ("add", "remove"):
+            return "usage: alias add <RANK> <ALIAS> | alias remove <RANK> <ALIAS> | alias list"
+        rank_name, alias = normalise_prefix_text(args[1]), normalise_prefix_text(args[2])
+        target = next((r for r in ranks if normalise_prefix_text(str(r["name"])) == rank_name), None)
+        if target is None:
+            return f"unknown rank {args[1]!r}; ranks: {', '.join(str(r['name']) for r in ranks)}"
+        aliases = [normalise_prefix_text(str(a)) for a in target.get("aliases") or []]
+        if args[0] == "add":
+            if alias in aliases:
+                return f"{alias} is already an alias of {rank_name}"
+            aliases.append(alias)
+        else:
+            if alias not in aliases:
+                return f"{alias} is not an alias of {rank_name}"
+            aliases.remove(alias)
+        target["aliases"] = aliases
+        try:
+            RankPolicy.from_config(ranks, self.ctx.settings.get("ranks.staff_prefixes"), scuffed_rank=str(self.ctx.settings.get("ranks.scuffed_rank", "SCUFFED")))
+        except PolicyError as exc:
+            return f"refused: {exc}"
+        self.ctx.settings.set("ranks.player_ranks", ranks, changed_by="console", reason=f"alias {args[0]} {alias} -> {rank_name}")
+        job_id = self.runner.submit("reparse_detections", {"all": True}, label=f"re-parse after alias {args[0]}", created_by="console")
+        return f"{alias} {'now maps to' if args[0] == 'add' else 'removed from'} {rank_name}; re-parse and recompute queued as job #{job_id}"
+
+    def cmd_staff_alias(self, args: list[str]) -> str:
+        from rankrecovery.core.ranks import PolicyError, RankPolicy
+        from rankrecovery.core.text import normalise_prefix_text
+
+        staff = [dict(r) for r in self.ctx.settings.get("ranks.staff_prefixes")]
+        if len(args) != 3 or args[0] not in ("add", "remove"):
+            return "usage: staff-alias add <STAFF> <ALIAS> | staff-alias remove <STAFF> <ALIAS>"
+        staff_name, alias = normalise_prefix_text(args[1]), normalise_prefix_text(args[2])
+        target = next((r for r in staff if normalise_prefix_text(str(r["name"])) == staff_name), None)
+        if target is None:
+            return f"unknown staff prefix {args[1]!r}; known: {', '.join(str(r['name']) for r in staff)}"
+        aliases = [normalise_prefix_text(str(a)) for a in target.get("aliases") or []]
+        if args[0] == "add" and alias not in aliases:
+            aliases.append(alias)
+        elif args[0] == "remove" and alias in aliases:
+            aliases.remove(alias)
+        target["aliases"] = aliases
+        try:
+            RankPolicy.from_config(self.ctx.settings.get("ranks.player_ranks"), staff, scuffed_rank=str(self.ctx.settings.get("ranks.scuffed_rank", "SCUFFED")))
+        except PolicyError as exc:
+            return f"refused: {exc}"
+        self.ctx.settings.set("ranks.staff_prefixes", staff, changed_by="console", reason=f"staff alias {args[0]} {alias} -> {staff_name}")
+        job_id = self.runner.submit("reparse_detections", {"all": True}, label=f"re-parse after staff alias {args[0]}", created_by="console")
+        return f"{alias} {'now maps to' if args[0] == 'add' else 'removed from'} {staff_name}; re-parse and recompute queued as job #{job_id}"
 
     def cmd_convert(self, args: list[str]) -> str:
         from rankrecovery.services.conversion import ConversionService
@@ -337,8 +400,14 @@ class AdminConsole:
             except json.JSONDecodeError:
                 value = raw
             changed = self.ctx.settings.set(args[1], value, changed_by="console")
-            from rankrecovery.api.routes.settings import RECOMPUTE_KEYS
+            from rankrecovery.api.routes.settings import RECOMPUTE_KEYS, REPARSE_KEYS
 
+            if changed and args[1] in REPARSE_KEYS:
+                from rankrecovery.services.reconcile import ReconcileService
+
+                ReconcileService(self.ctx).mark_all_stale(f"console changed {args[1]}")
+                job_id = self.runner.submit("reparse_detections", {"all": True}, label="re-parse after console setting", created_by="console")
+                return f"set {args[1]}; re-parse and recompute queued as job #{job_id}"
             if changed and args[1] in RECOMPUTE_KEYS:
                 from rankrecovery.services.reconcile import ReconcileService
 

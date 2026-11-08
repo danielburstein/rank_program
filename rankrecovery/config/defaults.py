@@ -10,7 +10,7 @@ from __future__ import annotations
 # Ordered lowest to highest. Priority = index + 1.
 DEFAULT_PLAYER_RANKS: list[dict] = [
     {"name": "DEFAULT", "aliases": ["MEMBER"], "enabled": True},
-    {"name": "HERO", "aliases": ["NOVA"], "enabled": True},
+    {"name": "HERO", "aliases": ["NOVA", "GLOBAL"], "enabled": True},
     {"name": "LEGEND", "aliases": [], "enabled": True},
     {"name": "TITAN", "aliases": [], "enabled": True},
     {"name": "GOD", "aliases": [], "enabled": True},

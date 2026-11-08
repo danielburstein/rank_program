@@ -8,8 +8,15 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from rankrecovery.core.enums import DetectionStatus, ExtractorType, ReviewStatus
-from rankrecovery.core.parsing import ParsedDetection, RowParser
+from rankrecovery.core.enums import (
+    DetectionStatus,
+    ExtractorType,
+    LeadingIcon,
+    RegionKind,
+    ReviewStatus,
+    TrailingIcon,
+)
+from rankrecovery.core.parsing import ParsedDetection, RawRow, RowParser
 from rankrecovery.core.usernames import normalise_username_key
 from rankrecovery.db.models import (
     Detection,
@@ -21,7 +28,7 @@ from rankrecovery.db.models import (
 )
 from rankrecovery.extraction.base import DetectedRegion, ExtractionOutput, ExtractorUnavailable, TextExtractor
 from rankrecovery.services.context import AppContext
-from rankrecovery.services.flags import upsert_flags
+from rankrecovery.services.flags import sync_auto_flags, upsert_flags
 from rankrecovery.services.players import add_alias, get_or_create_player
 
 log = logging.getLogger(__name__)
@@ -238,6 +245,87 @@ class ExtractionService:
             manual=manual,
             created_by=actor,
         )
+
+    # ------------------------------------------------------------- re-parse
+    def reparse_detections(self, image_ids: list[int] | None = None, *, actor: str = "reparse") -> dict[str, int]:
+        """Re-classify stored detections under the current rank policy.
+
+        The raw text, boxes and confidence recorded at extraction time are
+        kept; only the derived classification (rank, staff, custom prefix,
+        review need) and the automatic observations are rebuilt. Detections a
+        person already accepted or rejected are left exactly as they are.
+        """
+        parser = self.parser()
+        policy = self.ctx.policy()
+        counts = {"checked": 0, "changed": 0, "skipped_reviewed": 0, "players_touched": 0}
+        touched: set[int] = set()
+        with self.ctx.db.write_session() as s:
+            stmt = select(Detection).where(Detection.superseded_by_id.is_(None), Detection.manual.is_(False))
+            if image_ids:
+                stmt = stmt.where(Detection.image_id.in_(image_ids))
+            for row in s.execute(stmt.order_by(Detection.id)).scalars():
+                counts["checked"] += 1
+                if row.status in (DetectionStatus.ACCEPTED.value, DetectionStatus.REJECTED.value):
+                    counts["skipped_reviewed"] += 1
+                    continue
+                raw = RawRow(
+                    text=row.raw_text,
+                    region=RegionKind(row.region) if row.region in RegionKind._value2member_map_ else RegionKind.UNKNOWN,
+                    bbox=tuple(row.bbox) if row.bbox else None,  # type: ignore[arg-type]
+                    prefix_text=row.raw_prefix,
+                    username_text=row.raw_username,
+                    prefix_bbox=tuple(row.prefix_bbox) if row.prefix_bbox else None,  # type: ignore[arg-type]
+                    username_bbox=tuple(row.username_bbox) if row.username_bbox else None,  # type: ignore[arg-type]
+                    leading_icon=LeadingIcon(row.leading_icon) if row.leading_icon in LeadingIcon._value2member_map_ else LeadingIcon.NONE,
+                    trailing_icon=TrailingIcon(row.trailing_icon) if row.trailing_icon in TrailingIcon._value2member_map_ else TrailingIcon.NONE,
+                    confidence=row.confidence,
+                    prefix_unreadable=(row.prefix_kind == "unreadable" and not row.raw_prefix),
+                    username_unreadable=row.unreadable_username,
+                    username_cut_off=row.partial,
+                )
+                d = parser.parse(raw)
+                if d is None:
+                    continue
+                before = (row.prefix_kind, row.rank_canonical, row.staff_canonical, row.custom_prefix, row.trailing_icon_rank, row.needs_review, row.status)
+                after = (d.prefix_match.kind.value, d.rank_observation, d.staff_observation, d.custom_prefix_text, d.trailing_icon_rank, d.needs_review, d.status.value)
+                if before == after:
+                    continue
+                counts["changed"] += 1
+                row.normalised_prefix = d.normalised_prefix[:128]
+                row.prefix_kind = d.prefix_match.kind.value
+                row.rank_canonical = d.rank_observation
+                row.staff_canonical = d.staff_observation
+                row.custom_prefix = d.custom_prefix_text
+                row.trailing_icon_rank = d.trailing_icon_rank
+                row.yinyang_evidence = d.yinyang_evidence
+                row.misread_of = d.prefix_match.misread_of
+                row.needs_review = d.needs_review
+                row.status = d.status.value
+                row.notes = list(d.notes) + [f"re-parsed under policy {policy.fingerprint()}"]
+                sync_auto_flags(s, "detection", row.id, d.flags, actor=actor)
+                # retire the automatic observations of this detection (kept for history) and rebuild them
+                reason = f"superseded by re-parse under policy {policy.fingerprint()}"
+                for obs in s.execute(select(RankObservation).where(RankObservation.detection_id == row.id, RankObservation.is_active.is_(True))).scalars():
+                    if not obs.manually_verified:
+                        obs.is_active = False
+                        obs.deactivated_reason = reason
+                for st in s.execute(select(StaffObservation).where(StaffObservation.detection_id == row.id, StaffObservation.is_active.is_(True))).scalars():
+                    st.is_active = False
+                s.flush()
+                if row.player_id and d.status not in (DetectionStatus.PARTIAL, DetectionStatus.UNREADABLE, DetectionStatus.CONTEXT_ONLY):
+                    review = ReviewStatus.PENDING if d.needs_review else ReviewStatus.NOT_REQUIRED
+                    for rank, basis in d.all_rank_observations:
+                        s.add(RankObservation(player_id=row.player_id, detection_id=row.id, image_id=row.image_id, source_type=d.source_type.value, basis=basis, raw_text=(d.raw_prefix if basis == "prefix" else f"{d.trailing_icon.value} icon")[:128], rank_canonical=rank, rank_priority=policy.priority(rank), custom_prefix=d.custom_prefix_text if basis == "prefix" else None, credibility=d.credibility.value, confidence=d.confidence, review_status=review.value, created_by=actor))
+                    if d.staff_observation:
+                        s.add(StaffObservation(player_id=row.player_id, detection_id=row.id, image_id=row.image_id, raw_text=d.raw_prefix[:128], staff_canonical=d.staff_observation, has_yinyang=bool(d.yinyang_evidence), review_status=review.value, created_by=actor))
+                if row.player_id:
+                    touched.add(row.player_id)
+            for pid in touched:
+                existing = s.execute(select(PlayerSummary).where(PlayerSummary.player_id == pid)).scalars().first()
+                if existing is not None:
+                    existing.stale = True
+        counts["players_touched"] = len(touched)
+        return counts
 
     # ------------------------------------------------------------ manual rows
     def add_manual_detection(self, image_id: int, d: ParsedDetection, *, actor: str, reason: str) -> ExtractionSummary:

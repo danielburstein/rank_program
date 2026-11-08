@@ -18,6 +18,7 @@ def test_default_order_and_priorities(policy):
     [
         ("Member", "DEFAULT", PrefixKind.SEASONAL_ALIAS),
         ("NOVA", "HERO", PrefixKind.SEASONAL_ALIAS),
+        ("Global", "HERO", PrefixKind.SEASONAL_ALIAS),
         ("Solar", "IMMORTAL", PrefixKind.SEASONAL_ALIAS),
         ("cosmic", "IMMORTAL+", PrefixKind.SEASONAL_ALIAS),
         ("◇ Titan ◇", "TITAN", PrefixKind.PLAYER_RANK),

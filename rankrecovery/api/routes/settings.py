@@ -15,6 +15,19 @@ from rankrecovery.services.reconcile import ReconcileService
 router = APIRouter(tags=["settings"])
 
 RECOMPUTE_KEYS = {k for keys in POLICY_KEYS.values() for k in keys} | {"conversion.allowed_flags", "conversion.allow_resolved_flags", "conversion.input_mode"}
+REPARSE_KEYS = set(POLICY_KEYS["rank_policy"])
+
+
+def queue_policy_refresh(request: Request, changed: list[str], *, actor: str, reason: str) -> int | None:
+    """Rank-list changes re-parse stored readings; other policy changes just recompute."""
+    ctx = ctx_of(request)
+    if any(k in REPARSE_KEYS for k in changed):
+        ReconcileService(ctx).mark_all_stale(reason)
+        return runner_of(request).submit("reparse_detections", {"all": True}, label="re-parse after rank policy change", created_by=actor)
+    if any(k in RECOMPUTE_KEYS for k in changed):
+        ReconcileService(ctx).mark_all_stale(reason)
+        return runner_of(request).submit("recompute_players", {"all": True}, label="recompute after settings change", created_by=actor)
+    return None
 
 
 @router.get("/settings")
@@ -38,10 +51,7 @@ def update_settings(body: SettingsUpdate, request: Request, principal: Principal
         if key in SECRET_SETTINGS and value in ("***", None):
             values.pop(key, None)
     changed = ctx.settings.set_many(values, changed_by=principal.name, reason=body.reason)
-    job_id = None
-    if any(k in RECOMPUTE_KEYS for k in changed):
-        ReconcileService(ctx).mark_all_stale(f"settings changed: {', '.join(k for k in changed if k in RECOMPUTE_KEYS)}")
-        job_id = runner_of(request).submit("recompute_players", {"all": True}, label="recompute after settings change", created_by=principal.name)
+    job_id = queue_policy_refresh(request, changed, actor=principal.name, reason=f"settings changed: {', '.join(k for k in changed if k in RECOMPUTE_KEYS)}")
     return {"changed": changed, "job_id": job_id}
 
 
@@ -56,10 +66,7 @@ def reset_settings(body: SettingsReset, request: Request, principal: Principal =
             changed.append(key)
     if body.prefix:
         changed += ctx.settings.reset_group(body.prefix, changed_by=principal.name)
-    job_id = None
-    if any(k in RECOMPUTE_KEYS for k in changed):
-        ReconcileService(ctx).mark_all_stale("settings restored to defaults")
-        job_id = runner_of(request).submit("recompute_players", {"all": True}, label="recompute after restore defaults", created_by=principal.name)
+    job_id = queue_policy_refresh(request, changed, actor=principal.name, reason="settings restored to defaults")
     return {"changed": changed, "job_id": job_id}
 
 

@@ -114,6 +114,25 @@ def lookup_uuids(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dic
     return {"resolved": summary.resolved, "not_found": summary.not_found, "failed": summary.failed, "skipped": summary.skipped, "merged": summary.merged}
 
 
+def reparse_detections(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:
+    """Re-classify stored readings under the current rank policy, then recompute every player."""
+    from rankrecovery.services.conversion import ConversionService
+    from rankrecovery.services.extraction import ExtractionService
+    from rankrecovery.services.reconcile import ReconcileService
+
+    job.progress(0, 0, "re-parsing stored detections")
+    counts = ExtractionService(ctx).reparse_detections(params.get("image_ids") or None)
+    recon = ReconcileService(ctx)
+    ids = recon.all_player_ids() if params.get("all", True) else recon.stale_player_ids()
+    for i, pid in enumerate(ids, start=1):
+        job.check_cancelled()
+        recon.recompute_player(pid)
+        if i % 20 == 0 or i == len(ids):
+            job.progress(i, len(ids), f"recomputing players {i}/{len(ids)}")
+    ConversionService(ctx).recompute()
+    return {**counts, "players_recomputed": len(ids)}
+
+
 def refresh_names(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:
     from rankrecovery.services.identity import IdentityService
 
@@ -140,3 +159,4 @@ def register_default_handlers(runner: JobRunner) -> None:
     runner.register("lookup_uuids", lookup_uuids)
     runner.register("rescan_images", rescan_images)
     runner.register("refresh_names", refresh_names)
+    runner.register("reparse_detections", reparse_detections)

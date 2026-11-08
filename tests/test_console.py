@@ -51,6 +51,14 @@ def test_console_commands(tmp_path):
         assert "matched 1" in out_text and "recompute queued" in out_text
         assert "file not found" in console.run("identity-import nope.json")
         assert console.run("names").startswith("queued job #")
+        assert "GLOBAL" in console.run("alias list")
+        assert "now maps to HERO" in console.run("alias add HERO NEBULA")
+        assert "already an alias" in console.run("alias add HERO NEBULA")
+        assert "refused" in console.run("alias add LEGEND NEBULA")  # ambiguous alias rejected
+        assert "removed from HERO" in console.run("alias remove HERO NEBULA")
+        assert "unknown rank" in console.run("alias add NOPE X")
+        assert "now maps to MOD" in console.run("staff-alias add MOD MODERATORR")
+        assert console.run("reparse").startswith("queued job #")
         assert "no such player" in console.run("lookups Nobody")
         assert "could not parse" in console.run('player "unterminated')
     finally:
