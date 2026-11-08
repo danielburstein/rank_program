@@ -200,7 +200,13 @@ def job_status_text(job: dict[str, Any]) -> str:
             parts.append(f"result: {summary}")
     if job.get("error"):
         parts.append(f"error: {job['error']}")
-    return truncate(" · ".join(parts), 1900)
+    text = " · ".join(parts)
+    item_errors = job.get("errors") or []
+    if item_errors:
+        text += "\n" + "\n".join(f"• {e.get('item', '?')}: {e.get('message', '')}" for e in item_errors[:5])
+        if len(item_errors) > 5:
+            text += f"\n… {len(item_errors) - 5} more"
+    return truncate(text, 1900)
 
 
 def dashboard_text(dashboard: dict[str, Any], health: dict[str, Any] | None) -> str:

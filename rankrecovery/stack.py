@@ -54,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the Rank Recovery API server and Discord bot together")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--no-bot", action="store_true", help="run the API only")
+    parser.add_argument("--no-console", action="store_true", help="do not read admin commands from stdin")
     parser.add_argument("--log-level", default=None)
     args = parser.parse_args(argv)
 
@@ -114,6 +115,15 @@ def main(argv: list[str] | None = None) -> int:
             signal.signal(sig, handle_signal)
         except ValueError:  # pragma: no cover - not main thread
             pass
+
+    if not args.no_console:
+        from rankrecovery.console import AdminConsole
+
+        def request_stop() -> None:
+            stop.set()
+            server.should_exit = True
+
+        AdminConsole(ctx, app.state.runner, stop=request_stop).start()
 
     server.run()
     if bot_thread is not None and bot_loop is not None and bot_thread.is_alive():

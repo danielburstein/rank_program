@@ -66,21 +66,16 @@ Restart the split server after every `.env` change.
 
 ## 5. Create the API keys
 
-The panel console only talks to the running process, so keys are created
-with a one-off command. Temporarily set the egg's entry file / startup
-command to:
+Type in the panel console (section 8 lists all commands):
 
 ```
-python -c "import main" ; python -m rankrecovery.cli create-key --name desktop --role admin ; python -m rankrecovery.cli create-key --name discord-bot --role staff
+key create desktop admin
+key create discord-bot staff
 ```
 
-(or simply upload a tiny `makekeys.py` that imports `main`'s path setup and
-calls `rankrecovery.cli.main([...])`), start the server once, copy the two
-keys from the console, then set the entry file back to `main.py`.
-
-Alternative that needs no startup edit: set `RANKRECOVERY_ADMIN_KEY=<long
-random string>` in `.env`, restart, and create the real keys from your PC
-with the HTTP API:
+Each prints the key once. Alternative without the console: set
+`RANKRECOVERY_ADMIN_KEY=<long random string>` in `.env`, restart, and create
+the real keys from your PC with the HTTP API:
 
 ```bash
 curl -X POST http://<split-ip>:<port>/api/v1/admin/keys -H "X-API-Key: <that string>" -H "Content-Type: application/json" -d '{"name":"desktop","role":"admin"}'
@@ -107,7 +102,26 @@ a long random key, create a new key if you ever suspect it leaked, and keep
 `.env` out of any shared place. If you want encryption, host the stack on a
 small VPS behind a reverse proxy instead (see `docs/DEPLOYMENT.md`).
 
-## 8. Applying the export
+## 8. Panel console commands
+
+The box at the bottom of the panel console is wired to the app. Type `help`
+for the list; the most useful ones:
+
+| Command | Does |
+|---|---|
+| `status` | counts, vision/model state, active jobs |
+| `env` | which secrets are set (masked) and the bot/guild configuration |
+| `vision test` | checks the Anthropic key and model with one cheap API call and says exactly what is wrong |
+| `vision model claude-sonnet-5-5` | switch the vision model |
+| `job 1` | a job with every per-image error message |
+| `extract --force` | re-run extraction on every image (for example after fixing the key) |
+| `player <name>` / `players [search]` | rank summary with the verification panel in text |
+| `image <id>` | runs, detections and flags of one screenshot |
+| `settings get/set/list` | read or change any setting (policy keys queue a recompute) |
+| `key create <name> <role>` / `keys` / `key revoke <id>` | API keys without curl |
+| `export preview`, `backup`, `logs 50 warning`, `stop` | |
+
+## 9. Applying the export
 
 The export is a TXT file of `lp user <uuid> parent set <group>` lines.
 Paste them into the console of whichever server runs LuckPerms (the backend
