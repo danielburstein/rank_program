@@ -71,7 +71,7 @@ ROWS_SCHEMA: dict[str, Any] = {
                     "leading_icon": {"type": "string", "enum": ["diamond", "infinity", "yinyang", "none", "other"]},
                     "trailing_icon": {"type": "string", "enum": ["none", "yinyang", "infinity", "unknown"]},
                     "region": {"type": "string", "enum": ["tab", "chat", "nametag", "scoreboard", "unknown"]},
-                    "bbox": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+                    "bbox": {"type": "array", "items": {"type": "number"}},
                     "has_colon_after_name": {"type": "boolean"},
                     "confidence": {"type": "number"},
                     "notes": {"type": "string"},
@@ -109,10 +109,10 @@ LAYOUT_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "kind": {"type": "string", "enum": ["tab", "chat", "nametag", "scoreboard"]},
-                    "bbox": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+                    "bbox": {"type": "array", "items": {"type": "number"}},
                     "columns": {
                         "type": "array",
-                        "items": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+                        "items": {"type": "array", "items": {"type": "number"}},
                     },
                     "confidence": {"type": "number"},
                 },
