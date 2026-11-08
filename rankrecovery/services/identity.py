@@ -29,7 +29,7 @@ from rankrecovery.identity.base import LookupResult
 from rankrecovery.services.audit import audit
 from rankrecovery.services.context import AppContext
 from rankrecovery.services.flags import upsert_flags
-from rankrecovery.services.players import add_alias, merge_group_ids, resolve_survivor
+from rankrecovery.services.players import add_alias, find_player_by_username, get_or_create_player, merge_group_ids, resolve_survivor
 
 log = logging.getLogger(__name__)
 
@@ -388,6 +388,99 @@ class IdentityService:
                     log.warning("auto-merge skipped for %s/%s: %s", survivor, other, exc)
         return merged
 
+    # ----------------------------------------------------- server-record import
+    def import_identity_records(self, content: bytes, *, filename: str, actor: str, create_missing: bool = False) -> dict[str, Any]:
+        """Import username<->UUID pairs from the old server's own records.
+
+        Accepts ``usercache.json`` (list of {name, uuid}), any JSON list/dict with
+        name+uuid fields, or a CSV with username and uuid columns. Pairs become
+        verified identities with source ``server_records``; a pair that
+        contradicts an existing verified UUID is flagged for review instead of
+        overwriting it.
+        """
+        records, errors = _parse_identity_records(content)
+        summary: dict[str, Any] = {"filename": filename, "records": len(records), "invalid": len(errors), "matched": 0, "already_known": 0, "conflicts": 0, "unmatched": 0, "created": 0, "errors": errors[:50]}
+        touched: set[int] = set()
+        with self.ctx.db.write_session() as s:
+            for rec in records:
+                username, uuid = rec["username"], rec["uuid"]
+                player = find_player_by_username(s, username)
+                if player is None:
+                    if not create_missing:
+                        summary["unmatched"] += 1
+                        continue
+                    player, _ = get_or_create_player(s, username, source="server_records")
+                    summary["created"] += 1
+                add_alias(s, player, username, source="server_records")
+                if player.canonical_uuid and player.canonical_uuid != uuid and player.identity_status in (IdentityStatus.VERIFIED.value, IdentityStatus.MANUAL.value):
+                    summary["conflicts"] += 1
+                    note = f"{filename}: {username} -> {uuid} contradicts verified UUID {player.canonical_uuid} ({player.identity_source})"
+                    s.add(IdentityResolution(player_id=player.id, uuid=uuid, status=IdentityStatus.AMBIGUOUS.value, source="server_records", queried_name=username, note=note))
+                    upsert_flags(s, "player", player.id, [FlagInstance("IDENTITY_CONFLICT", note[:1000])], actor=actor, source="manual")
+                    touched.add(player.id)
+                    continue
+                if player.canonical_uuid == uuid:
+                    summary["already_known"] += 1
+                    continue
+                for old in s.execute(select(IdentityResolution).where(IdentityResolution.player_id == player.id, IdentityResolution.is_active.is_(True))).scalars():
+                    old.is_active = False
+                player.canonical_uuid = uuid
+                player.identity_status = IdentityStatus.VERIFIED.value
+                player.identity_source = "server_records"
+                s.add(IdentityResolution(player_id=player.id, uuid=uuid, status=IdentityStatus.VERIFIED.value, source="server_records", queried_name=username, note=f"imported from {filename}" + (f" ({rec['extra']})" if rec.get("extra") else "")))
+                summary["matched"] += 1
+                touched.add(player.id)
+            for pid in touched:
+                ps = s.execute(select(PlayerSummary).where(PlayerSummary.player_id == pid)).scalars().first()
+                if ps:
+                    ps.stale = True
+            audit(s, actor=actor, action="identity.import_records", entity_type="identity_import", entity_id=None, after={k: v for k, v in summary.items() if k != "errors"})
+        summary["merged"] = self.auto_merge_shared_uuids(actor=actor)
+        return summary
+
+    # ------------------------------------------------------ current-name refresh
+    def refresh_current_names(self, player_ids: list[int] | None = None, *, force: bool = False, provider: Any | None = None, job_id: int | None = None, progress: Callable[[int, int], None] | None = None, cancel: threading.Event | None = None, actor: str = "lookup") -> dict[str, int]:
+        """Fill ``current_name`` from Mojang for players whose UUID is known (Java accounts only)."""
+        from rankrecovery.core.identity import is_floodgate_uuid
+        from rankrecovery.identity.providers import MojangProfileProvider
+        from rankrecovery.identity.ratelimit import RateLimiter
+
+        settings = self.ctx.settings.get_all(include_secrets=True)
+        provider = provider or MojangProfileProvider(settings)
+        limiter = RateLimiter(float(settings.get("lookup.profile_requests_per_minute", 60)))
+        with self.ctx.db.read_session() as s:
+            stmt = select(Player).where(Player.merged_into_id.is_(None), Player.canonical_uuid.is_not(None))
+            if player_ids:
+                stmt = stmt.where(Player.id.in_(player_ids))
+            targets = [(p.id, p.canonical_uuid) for p in s.execute(stmt.order_by(Player.id)).scalars() if (force or not p.current_name) and not is_floodgate_uuid(p.canonical_uuid)]
+        counts = {"checked": 0, "updated": 0, "unchanged": 0, "not_found": 0, "failed": 0}
+        for n, (pid, uuid) in enumerate(targets, start=1):
+            if cancel is not None and cancel.is_set():
+                break
+            limiter.acquire(provider.name, cancel)
+            result = provider.lookup(uuid)
+            counts["checked"] += 1
+            with self.ctx.db.write_session() as s:
+                for a in result.attempts:
+                    s.add(LookupAttemptRow(player_id=pid, queried_name=a.queried_name, provider=a.provider, attempt_no=a.attempt_no, started_at=a.started_at, elapsed_ms=a.elapsed_ms, http_status=a.http_status, outcome=a.outcome.value, failure_code=a.failure_code, error_message=a.error_message[:2000], resolved_uuid=a.resolved_uuid, resolved_name=a.resolved_name, response_valid=a.response_valid, raw_excerpt=a.raw_excerpt[:500], job_id=job_id))
+                player = s.get(Player, pid)
+                if player is None:
+                    continue
+                if result.resolved and result.current_name:
+                    if player.current_name != result.current_name:
+                        player.current_name = result.current_name
+                        add_alias(s, player, result.current_name, source="lookup")
+                        counts["updated"] += 1
+                    else:
+                        counts["unchanged"] += 1
+                elif result.outcome == LookupOutcome.NOT_FOUND:
+                    counts["not_found"] += 1
+                else:
+                    counts["failed"] += 1
+            if progress:
+                progress(n, len(targets))
+        return counts
+
     def identity_table(self, *, limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
         with self.ctx.db.read_session() as s:
             out = []
@@ -413,3 +506,48 @@ class IdentityService:
 
 def merged_member_ids(s: Any, survivor_id: int) -> list[int]:
     return merge_group_ids(s, survivor_id)
+
+
+def _parse_identity_records(content: bytes) -> tuple[list[dict[str, Any]], list[str]]:
+    """Parse usercache.json-style JSON or a CSV with username/uuid columns."""
+    import csv
+    import io
+    import json
+
+    from rankrecovery.core.usernames import validate_username
+
+    text = content.decode("utf-8-sig", errors="replace")
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    stripped = text.lstrip()
+    rows: list[dict[str, Any]] = []
+    if stripped.startswith("[") or stripped.startswith("{"):
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            return [], [f"invalid JSON: {exc}"]
+        if isinstance(data, dict):
+            # {"uuid": "name"} maps or {"players": [...]} wrappers
+            inner = next((v for v in data.values() if isinstance(v, list)), None)
+            rows = inner if inner is not None else [{"uuid": k, "name": v} for k, v in data.items() if isinstance(v, str)]
+        elif isinstance(data, list):
+            rows = [r for r in data if isinstance(r, dict)]
+    else:
+        reader = csv.DictReader(io.StringIO(text))
+        rows = [{(k or "").strip(): (v or "").strip() for k, v in r.items()} for r in reader]
+    name_keys = ("name", "username", "userName", "user_name", "player", "ign", "lastKnownName", "last_known_name")
+    uuid_keys = ("uuid", "id", "UUID", "player_uuid", "uniqueId", "unique_id")
+    for index, row in enumerate(rows, start=1):
+        name = next((str(row[k]) for k in name_keys if row.get(k)), "")
+        raw_uuid = next((str(row[k]) for k in uuid_keys if row.get(k)), "")
+        uuid = normalise_uuid(raw_uuid) if raw_uuid else None
+        check = validate_username(name)
+        if not name or not check.valid:
+            errors.append(f"row {index}: invalid username {name!r}")
+            continue
+        if uuid is None:
+            errors.append(f"row {index}: invalid uuid {raw_uuid!r} for {name}")
+            continue
+        extra = row.get("expiresOn") or row.get("last_seen") or ""
+        records.append({"username": check.normalised, "uuid": uuid, "extra": str(extra)})
+    return records, errors

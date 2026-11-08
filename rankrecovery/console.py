@@ -48,6 +48,8 @@ class AdminConsole:
             "convert": (self.cmd_convert, "run Mode 2 conversion"),
             "lookup": (self.cmd_lookup, "lookup [--retry-failed] [--all] [--force]: queue UUID lookups (--all re-checks resolved players too, --force ignores the cache)"),
             "players": (self.cmd_players, "players [search]: list players"),
+            "identity-import": (self.cmd_identity_import, "identity-import <file> [--create]: import username/UUID pairs from usercache.json or a CSV (old server records)"),
+            "names": (self.cmd_names, "names [--force]: fetch current Mojang names for players with a known UUID"),
             "lookups": (self.cmd_lookups, "lookups <name> [n]: recent UUID lookup attempts for a player, with status, failure code and the raw response excerpt"),
             "player": (self.cmd_player, "player <name>: full summary for one player"),
             "images": (self.cmd_images, "images [n]: recent images"),
@@ -213,6 +215,28 @@ class AdminConsole:
             lines.append(f"new rank {d['conversion']['new_rank']} included={d['conversion']['included']} {'; '.join(d['conversion']['reasons'])}".rstrip())
         lines.append(f"stale={s['stale']} · flags: {', '.join(f['code'] for f in d['flags'] if f['is_active']) or 'none'}")
         return "\n".join(lines)
+
+    def cmd_identity_import(self, args: list[str]) -> str:
+        if not args:
+            return "usage: identity-import <file> [--create]"
+        from pathlib import Path
+
+        from rankrecovery.services.identity import IdentityService
+
+        path = Path(args[0])
+        if not path.exists():
+            return f"file not found: {path} (upload it with the File Manager first)"
+        summary = IdentityService(self.ctx).import_identity_records(path.read_bytes(), filename=path.name, actor="console", create_missing="--create" in args)
+        lines = [f"records {summary['records']} · matched {summary['matched']} · already known {summary['already_known']} · conflicts {summary['conflicts']} · unmatched {summary['unmatched']} · created {summary['created']} · invalid {summary['invalid']} · merged {summary['merged']}"]
+        lines += [f"  {e}" for e in summary["errors"][:10]]
+        if summary["matched"] or summary["conflicts"]:
+            job_id = self.runner.submit("recompute_players", {}, label="recompute after identity import", created_by="console")
+            lines.append(f"recompute queued as job #{job_id}; run 'names' to fetch current Mojang names")
+        return "\n".join(lines)
+
+    def cmd_names(self, args: list[str]) -> str:
+        job_id = self.runner.submit("refresh_names", {"force": "--force" in args}, label="refresh current names", created_by="console")
+        return f"queued job #{job_id}"
 
     def cmd_lookups(self, args: list[str]) -> str:
         if not args:

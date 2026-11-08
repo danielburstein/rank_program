@@ -114,6 +114,19 @@ def lookup_uuids(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dic
     return {"resolved": summary.resolved, "not_found": summary.not_found, "failed": summary.failed, "skipped": summary.skipped, "merged": summary.merged}
 
 
+def refresh_names(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:
+    from rankrecovery.services.identity import IdentityService
+
+    cancel = threading.Event()
+
+    def progress(done: int, total: int) -> None:
+        if job.cancelled:
+            cancel.set()
+        job.progress(done, total, f"{done}/{total} profiles")
+
+    return IdentityService(ctx).refresh_current_names(params.get("player_ids") or None, force=bool(params.get("force", False)), job_id=job.job_id, progress=progress, cancel=cancel)
+
+
 def rescan_images(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:
     from rankrecovery.services.rescan import RescanService
 
@@ -126,3 +139,4 @@ def register_default_handlers(runner: JobRunner) -> None:
     runner.register("convert_players", convert_players)
     runner.register("lookup_uuids", lookup_uuids)
     runner.register("rescan_images", rescan_images)
+    runner.register("refresh_names", refresh_names)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from rankrecovery.api.auth import Principal, require
 from rankrecovery.api.routes._common import bad_request, ctx_of, not_found, runner_of
@@ -50,6 +50,21 @@ def unmerge(merge_id: int, body: Note, request: Request, principal: Principal = 
         raise not_found("merge") from exc
     job_id = runner_of(request).submit("recompute_players", {}, label="recompute after unmerge", created_by=principal.name)
     return {"ok": True, "job_id": job_id}
+
+
+@router.post("/identity/import")
+async def identity_import(request: Request, file: UploadFile = File(...), create_missing: bool = Form(False), principal: Principal = Depends(require(ApiRole.ADMIN))) -> dict:
+    content = await file.read()
+    summary = IdentityService(ctx_of(request)).import_identity_records(content, filename=file.filename or "records", actor=principal.name, create_missing=create_missing)
+    if summary["matched"] or summary["conflicts"]:
+        summary["job_id"] = runner_of(request).submit("recompute_players", {}, label="recompute after identity import", created_by=principal.name)
+    return summary
+
+
+@router.post("/identity/refresh-names")
+def refresh_names(request: Request, force: bool = False, principal: Principal = Depends(require(ApiRole.STAFF))) -> dict:
+    job_id = runner_of(request).submit("refresh_names", {"force": force}, label="refresh current names", created_by=principal.name)
+    return {"job_id": job_id}
 
 
 @router.get("/identity/proxies")

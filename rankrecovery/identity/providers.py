@@ -406,6 +406,35 @@ LABYNET_PREVIOUS_ACCOUNTS_URL = "https://laby.net/api/search/get-previous-accoun
 LABYNET_USER_AGENT = "Mozilla/5.0 (compatible; RankRecovery/0.1; +https://github.com/danielburstein/rank_program)"
 
 
+MOJANG_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{name}"
+
+
+class MojangProfileProvider(HttpJsonProvider):
+    """UUID -> current profile name through Mojang's session server.
+
+    ``lookup(uuid)`` takes a UUID (dashed or not) in place of a username and
+    resolves when the returned profile id matches it.
+    """
+
+    name = "mojang_profile"
+    not_found_statuses = frozenset({404, 204})
+
+    def __init__(self, settings: dict[str, Any] | None = None, client_factory: ClientFactory | None = None, clock: Callable[[], float] = time.monotonic) -> None:
+        settings = dict(settings or {})
+        super().__init__(str(settings.get("lookup.mojang_profile_url") or MOJANG_PROFILE_URL), settings=settings, client_factory=client_factory, clock=clock)
+
+    def build_url(self, username: str) -> str:
+        return self.url_template.format(name=username.replace("-", "").lower())
+
+    def validate_match(self, username: str, uuid: str, name: str) -> tuple[LookupOutcome, str | None, str]:
+        queried = normalise_uuid(username)
+        if queried is None:
+            return LookupOutcome.FAILED, F.INVALID_UUID, f"{username!r} is not a UUID"
+        if queried != uuid:
+            return LookupOutcome.FAILED, F.INVALID_RESPONSE, f"profile id {uuid} does not match queried uuid {queried}"
+        return LookupOutcome.RESOLVED, None, "current profile name from Mojang"
+
+
 class LabyNetHistoricalProvider(HttpJsonProvider):
     """Historical-name search through laby.net's previous-accounts endpoint.
 
@@ -425,14 +454,22 @@ class LabyNetHistoricalProvider(HttpJsonProvider):
         settings = dict(settings or {})
         super().__init__(str(settings.get("lookup.labynet_previous_accounts_url") or LABYNET_PREVIOUS_ACCOUNTS_URL), settings=settings, client_factory=client_factory, clock=clock)
         self.user_agent = str(settings.get("lookup.labynet_user_agent") or LABYNET_USER_AGENT)
+        extra = settings.get("lookup.labynet_extra_headers") or {}
+        self.extra_headers = {str(k): str(v) for k, v in extra.items()} if isinstance(extra, dict) else {}
 
     def request_headers(self) -> dict[str, str] | None:
-        return {"User-Agent": self.user_agent, "Accept": "application/json"}
+        headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
+        headers.update(self.extra_headers)  # e.g. an access token laby.net issued to you
+        return headers
 
     def attempt(self, username: str, *, attempt_no: int = 1, proxy: ProxyEntry | None = None) -> tuple[LookupResult, float | None]:
         result, retry_after = super().attempt(username, attempt_no=attempt_no, proxy=proxy)
         if result.attempts and result.attempts[-1].http_status == 428:
-            note = "laby.net refused the request (HTTP 428 Precondition Required): it filters clients by User-Agent; adjust lookup.labynet_user_agent"
+            note = (
+                "laby.net refused the request (HTTP 428, 'challenge token required'): the endpoint is behind laby.net's anti-bot gate. "
+                "Automated use needs access granted by laby.net; put any token they issue into lookup.labynet_extra_headers. "
+                "Otherwise use the old server's own records (identity import) and trusted purchase UUIDs."
+            )
             result.attempts[-1].error_message = note
             result.message = note
         return result, retry_after

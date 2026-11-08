@@ -46,6 +46,11 @@ def test_console_commands(tmp_path):
         assert "no Anthropic API key" in console.run("vision test")
         assert "command(s)" in console.run("export preview")
         assert "no lookup attempts" in console.run("lookups Player123")
+        (tmp_path / "usercache.json").write_text('[{"name": "Player123", "uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5"}]')
+        out_text = console.run(f'identity-import "{tmp_path / "usercache.json"}"')
+        assert "matched 1" in out_text and "recompute queued" in out_text
+        assert "file not found" in console.run("identity-import nope.json")
+        assert console.run("names").startswith("queued job #")
         assert "no such player" in console.run("lookups Nobody")
         assert "could not parse" in console.run('player "unterminated')
     finally:

@@ -91,13 +91,15 @@ Examples: `examples/purchases_*.csv` (templates only, never imported).
 
 ## Old usernames that have since changed
 
-Mojang's lookup only knows who holds a name *today*. Turn on the laby.net
-historical search (`lookup.historical_provider = labynet` in Settings › Lookup,
-or `settings set lookup.historical_provider labynet` in the panel console) and
-every lookup also finds the accounts that previously used the name. When more
-than one account did, the player is marked ambiguous with all candidates listed
-so you can pick the right UUID by hand. NameMC has no public API and cannot be
-used; the laby.net endpoint is undocumented, so treat it as a lead, not proof.
+Mojang's lookup only knows who holds a name *today*, and no open service
+still publishes name history (NameMC has no API; laby.net answers automated
+clients with a "challenge token required" gate). The dependable source is the
+old server itself: `usercache.json`, the `playerdata` folder, a LuckPerms or
+Essentials export, or purchase records all pair the historical name with the
+account UUID. Import them with the panel console (`identity-import
+usercache.json`) or the desktop client, then run `names` to fetch every
+account's current Mojang name. Conflicting records are flagged for review
+rather than overwritten.
 
 ## Proxies for UUID lookups
 

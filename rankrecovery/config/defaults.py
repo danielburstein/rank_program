@@ -165,6 +165,9 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "lookup.labynet_previous_accounts_url": "https://laby.net/api/search/get-previous-accounts/{name}",
     "lookup.labynet_requests_per_minute": 30,
     "lookup.labynet_user_agent": "Mozilla/5.0 (compatible; RankRecovery/0.1; +https://github.com/danielburstein/rank_program)",
+    "lookup.labynet_extra_headers": {},  # headers for an access token laby.net issued to you, e.g. {"X-Api-Token": "..."}
+    "lookup.mojang_profile_url": "https://sessionserver.mojang.com/session/minecraft/profile/{name}",
+    "lookup.profile_requests_per_minute": 60,
     "lookup.historical_url": "",
     "lookup.historical_uuid_path": "uuid",
     "lookup.historical_name_path": "name",
