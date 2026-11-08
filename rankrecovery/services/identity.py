@@ -29,7 +29,13 @@ from rankrecovery.identity.base import LookupResult
 from rankrecovery.services.audit import audit
 from rankrecovery.services.context import AppContext
 from rankrecovery.services.flags import upsert_flags
-from rankrecovery.services.players import add_alias, find_player_by_username, get_or_create_player, merge_group_ids, resolve_survivor
+from rankrecovery.services.players import (
+    add_alias,
+    find_player_by_username,
+    get_or_create_player,
+    merge_group_ids,
+    resolve_survivor,
+)
 
 log = logging.getLogger(__name__)
 
