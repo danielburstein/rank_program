@@ -164,6 +164,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "lookup.historical_provider": "none",  # none | labynet | custom
     "lookup.labynet_previous_accounts_url": "https://laby.net/api/search/get-previous-accounts/{name}",
     "lookup.labynet_requests_per_minute": 30,
+    "lookup.labynet_user_agent": "Mozilla/5.0 (compatible; RankRecovery/0.1; +https://github.com/danielburstein/rank_program)",
     "lookup.historical_url": "",
     "lookup.historical_uuid_path": "uuid",
     "lookup.historical_name_path": "name",

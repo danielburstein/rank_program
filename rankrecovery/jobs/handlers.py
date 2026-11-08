@@ -86,11 +86,17 @@ def lookup_uuids(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dic
     from rankrecovery.services.identity import IdentityService
 
     svc = IdentityService(ctx)
-    ids = list(params.get("player_ids") or []) or svc.candidate_player_ids(
-        only_unresolved=not params.get("retry_failed", False),
-        only_failed=bool(params.get("retry_failed", False)),
-        only_proxy_failures=bool(params.get("retry_proxy_failures", False)),
-    )
+    ids = list(params.get("player_ids") or [])
+    if not ids and params.get("all"):
+        from rankrecovery.services.reconcile import ReconcileService as _R
+
+        ids = _R(ctx).all_player_ids()
+    if not ids:
+        ids = svc.candidate_player_ids(
+            only_unresolved=not params.get("retry_failed", False),
+            only_failed=bool(params.get("retry_failed", False)),
+            only_proxy_failures=bool(params.get("retry_proxy_failures", False)),
+        )
     cancel = threading.Event()
 
     def progress(done: int, total: int) -> None:

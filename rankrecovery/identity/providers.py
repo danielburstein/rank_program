@@ -116,6 +116,10 @@ class HttpJsonProvider:
     def build_url(self, username: str) -> str:
         return self.url_template.format(name=quote(username, safe=""))
 
+    def request_headers(self) -> dict[str, str] | None:
+        """Extra headers for this provider (overrides the client defaults)."""
+        return None
+
     def parse_payload(self, data: Any, username: str) -> tuple[str, str]:
         """Return (canonical uuid, name) or raise ProviderPayloadError."""
         if not isinstance(data, dict):
@@ -167,7 +171,7 @@ class HttpJsonProvider:
         )
         try:
             client = self._clients.get(proxy.url if proxy else None)
-            response = client.get(url)
+            response = client.get(url, headers=self.request_headers())
         except Exception as exc:  # noqa: BLE001 - every transport failure must be classified
             attempt.elapsed_ms = int((self._clock() - started) * 1000)
             attempt.failure_code = classify_exception(exc, via_proxy=proxy is not None)
@@ -397,6 +401,9 @@ def _json_path(data: Any, path: str) -> Any:
 
 
 LABYNET_PREVIOUS_ACCOUNTS_URL = "https://laby.net/api/search/get-previous-accounts/{name}"
+# laby.net answers 428 Precondition Required unless the client identifies itself the way browsers and
+# public laby.net bots do: a Mozilla-compatible token plus a contact URL.
+LABYNET_USER_AGENT = "Mozilla/5.0 (compatible; RankRecovery/0.1; +https://github.com/danielburstein/rank_program)"
 
 
 class LabyNetHistoricalProvider(HttpJsonProvider):
@@ -417,6 +424,18 @@ class LabyNetHistoricalProvider(HttpJsonProvider):
     def __init__(self, settings: dict[str, Any] | None = None, client_factory: ClientFactory | None = None, clock: Callable[[], float] = time.monotonic) -> None:
         settings = dict(settings or {})
         super().__init__(str(settings.get("lookup.labynet_previous_accounts_url") or LABYNET_PREVIOUS_ACCOUNTS_URL), settings=settings, client_factory=client_factory, clock=clock)
+        self.user_agent = str(settings.get("lookup.labynet_user_agent") or LABYNET_USER_AGENT)
+
+    def request_headers(self) -> dict[str, str] | None:
+        return {"User-Agent": self.user_agent, "Accept": "application/json"}
+
+    def attempt(self, username: str, *, attempt_no: int = 1, proxy: ProxyEntry | None = None) -> tuple[LookupResult, float | None]:
+        result, retry_after = super().attempt(username, attempt_no=attempt_no, proxy=proxy)
+        if result.attempts and result.attempts[-1].http_status == 428:
+            note = "laby.net refused the request (HTTP 428 Precondition Required): it filters clients by User-Agent; adjust lookup.labynet_user_agent"
+            result.attempts[-1].error_message = note
+            result.message = note
+        return result, retry_after
 
     def _interpret(self, username: str, attempt: LookupAttempt, data: Any) -> LookupResult:
         users: Any = data.get("users") if isinstance(data, dict) else data

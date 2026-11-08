@@ -95,6 +95,7 @@ class RecomputeRequest(BaseModel):
 
 class LookupRequest(BaseModel):
     player_ids: list[int] | None = None
+    all: bool = False
     retry_failed: bool = False
     retry_proxy_failures: bool = False
     force: bool = False

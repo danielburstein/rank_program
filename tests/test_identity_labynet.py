@@ -144,3 +144,21 @@ def test_ambiguous_result_is_persisted_for_review(tmp_path):
 
 
 _ = json
+
+
+def test_labynet_sends_browser_style_user_agent_and_explains_428():
+    seen: dict[str, str] = {}
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        seen.update({k.lower(): v for k, v in r.headers.items()})
+        return httpx.Response(428, text="Precondition Required")
+
+    p = LabyNetHistoricalProvider(dict(DEFAULT_SETTINGS), client_factory=lambda proxy: httpx.Client(transport=httpx.MockTransport(handler), headers={"User-Agent": "rankrecovery/0.1"}))
+    res = p.lookup("Someone")
+    assert seen["user-agent"].startswith("Mozilla/5.0 (compatible; RankRecovery")
+    assert seen["accept"] == "application/json"
+    assert res.outcome == LookupOutcome.FAILED and res.failure_code == "UUID_LOOKUP_HTTP_CLIENT_ERROR" and "428" in res.message
+    # the combined lookup keeps the Mojang answer when laby.net refuses
+    svc = make_service(mojang_ok("Someone", UUID_A), handler)
+    combined = svc.resolve("Someone")
+    assert combined.resolved and combined.uuid == UUID_A and "failed" in combined.message

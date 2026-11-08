@@ -46,7 +46,7 @@ class AdminConsole:
             "extract": (self.cmd_extract, "extract [--force] [vision|ocr]: queue extraction of pending (or all) images"),
             "recompute": (self.cmd_recompute, "recompute [all]: recompute stale (or all) player summaries"),
             "convert": (self.cmd_convert, "run Mode 2 conversion"),
-            "lookup": (self.cmd_lookup, "lookup [--retry-failed] [--force]: queue UUID lookups"),
+            "lookup": (self.cmd_lookup, "lookup [--retry-failed] [--all] [--force]: queue UUID lookups (--all re-checks resolved players too, --force ignores the cache)"),
             "players": (self.cmd_players, "players [search]: list players"),
             "player": (self.cmd_player, "player <name>: full summary for one player"),
             "images": (self.cmd_images, "images [n]: recent images"),
@@ -183,7 +183,7 @@ class AdminConsole:
         return "conversion: " + json.dumps(ConversionService(self.ctx).recompute())
 
     def cmd_lookup(self, args: list[str]) -> str:
-        job_id = self.runner.submit("lookup_uuids", {"retry_failed": "--retry-failed" in args, "force": "--force" in args}, label="console lookup", created_by="console")
+        job_id = self.runner.submit("lookup_uuids", {"retry_failed": "--retry-failed" in args, "force": "--force" in args, "all": "--all" in args}, label="console lookup", created_by="console")
         return f"queued job #{job_id}"
 
     def cmd_players(self, args: list[str]) -> str:
