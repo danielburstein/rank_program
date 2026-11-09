@@ -12,6 +12,21 @@ TEBEX = (
 )
 
 
+def test_auto_map_prefers_columns_by_their_values():
+    from rankrecovery.services.csvimport import CsvImportService
+
+    headers = ["ID", "Transaction ID", "Date", "Status", "Username", "Email", "Uuid", "Package IDs", "Package Names"]
+    rows = [
+        {"ID": "79400451", "Transaction ID": "tbx-1", "Date": "2024-09-09T01:24:14+00:00", "Status": "Complete", "Username": "CJ_ALT1", "Email": "x@example.com", "Uuid": "7285321aab574b70a62234ea17297e4d", "Package IDs": "6107228", "Package Names": "'Galactic to Infinite'"},
+        {"ID": "79400452", "Transaction ID": "tbx-2", "Date": "2024-09-10T01:24:14+00:00", "Status": "Declined", "Username": "Other", "Email": "o@example.com", "Uuid": "d0f2fa97-222a-4a09-a3d3-2b8d5a336310", "Package IDs": "5913134", "Package Names": "'Immortal Rank'"},
+    ]
+    mapping = CsvImportService.auto_map(headers, rows)
+    assert mapping["rank"] == "Package Names" and mapping["uuid"] == "Uuid" and mapping["username"] == "Username"
+    assert mapping["transaction_id"] == "Transaction ID" and mapping["purchase_date"] == "Date" and mapping["status"] == "Status"
+    # without sample rows the name-based choice still works
+    assert CsvImportService.auto_map(["username", "uuid", "rank"])["rank"] == "rank"
+
+
 def test_rank_from_package_text():
     policy = default_policy()
     assert rank_from_package_text("'Galactic to Infinite'", policy) == ("INFINITE", "")

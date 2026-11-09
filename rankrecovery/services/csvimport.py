@@ -160,15 +160,60 @@ class CsvImportService:
             return ","
 
     @staticmethod
-    def auto_map(headers: list[str]) -> dict[str, str | None]:
-        mapping: dict[str, str | None] = {k: None for k in FIELD_CANDIDATES}
+    def auto_map(headers: list[str], sample_rows: list[dict[str, Any]] | None = None) -> dict[str, str | None]:
+        """Map fields to headers by name, then disambiguate by looking at the values.
+
+        Store exports often have several candidate columns (a numeric package
+        id next to the package names, an order id next to the UUID); the
+        values decide: the rank column should contain words, the UUID column
+        UUID-shaped strings, the username column no e-mail addresses.
+        """
+        rows = sample_rows or []
         lowered = {h.strip().lower().replace(" ", "_"): h for h in headers}
+        mapping: dict[str, str | None] = {k: None for k in FIELD_CANDIDATES}
+        taken: set[str] = set()
+
+        def values(header: str) -> list[str]:
+            return [str(r.get(header) or "").strip() for r in rows if str(r.get(header) or "").strip()]
+
+        def fraction(header: str, test: Any) -> float:
+            vals = values(header)
+            return sum(1 for v in vals if test(v)) / len(vals) if vals else 0.0
+
+        hints = {"rank": ("package", "product", "rank", "item"), "uuid": ("uuid",), "username": ("username", "player", "ign"), "purchase_date": ("date",), "transaction_id": ("transaction", "order"), "status": ("status",)}
         for field_name, candidates in FIELD_CANDIDATES.items():
+            options: list[str] = []
             for cand in candidates:
-                if cand in lowered and lowered[cand] not in mapping.values():
-                    mapping[field_name] = lowered[cand]
-                    break
-        # "id" is ambiguous: only use it as uuid when values look like UUIDs (checked later)
+                if cand in lowered and lowered[cand] not in options:
+                    options.append(lowered[cand])
+            for key, header in lowered.items():
+                if any(h in key for h in hints[field_name]) and header not in options:
+                    options.append(header)
+            options = [o for o in options if o not in taken]
+            if not options:
+                continue
+            best = options[0]
+            if rows:
+                def score(header: str, field_name: str = field_name) -> float:
+                    key = header.strip().lower()
+                    if field_name == "rank":
+                        return fraction(header, lambda v: any(c.isalpha() for c in v)) + (0.2 if "name" in key else 0.0)
+                    if field_name == "uuid":
+                        return fraction(header, lambda v: normalise_uuid(v) is not None)
+                    if field_name == "username":
+                        return fraction(header, lambda v: "@" not in v and not v.replace(".", "").isdigit() and " " not in v)
+                    if field_name == "purchase_date":
+                        return fraction(header, lambda v: bool(re.match(r"\d{4}-\d{2}-\d{2}", v)))
+                    if field_name == "transaction_id":
+                        return fraction(header, lambda v: not v.isdigit()) + (0.5 if "transaction" in key else 0.0)
+                    return 1.0 if key == "status" else 0.5
+
+                scored = sorted(options, key=score, reverse=True)
+                best = scored[0]
+                if field_name in ("rank", "uuid") and score(best) < 0.3:
+                    best = options[0] if field_name == "rank" else best
+            mapping[field_name] = best
+            taken.add(best)
         return mapping
 
     def preview(self, content: bytes, *, filename: str, mapping: dict[str, str | None] | None = None, delimiter: str | None = None) -> CsvPreview:
@@ -176,7 +221,8 @@ class CsvImportService:
         delimiter = delimiter or self.sniff_delimiter(text)
         reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
         headers = [h for h in (reader.fieldnames or []) if h is not None]
-        mapping = mapping or self.auto_map(headers)
+        raw_rows = [{k: (v or "").strip() for k, v in r.items() if k is not None} for r in reader]
+        mapping = mapping or self.auto_map(headers, raw_rows[:200])
         policy = self.ctx.policy()
         sha = hashlib.sha256(content).hexdigest()
         with self.ctx.db.read_session() as s:
@@ -184,8 +230,7 @@ class CsvImportService:
             existing_hashes = {row.row_hash: row.id for row in s.execute(select(CsvRow).where(CsvRow.is_active.is_(True))).scalars()}
         rows: list[PreviewRow] = []
         seen_in_file: set[str] = set()
-        for number, raw in enumerate(reader, start=2):
-            raw = {k: (v or "").strip() for k, v in raw.items() if k is not None}
+        for number, raw in enumerate(raw_rows, start=2):
             pr = self._validate_row(number, raw, mapping, policy)
             if pr.status == "valid":
                 if pr.row_hash in seen_in_file:
