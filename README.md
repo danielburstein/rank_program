@@ -21,7 +21,9 @@ starts the API and the bot in one process.
 Read `docs/ARCHITECTURE.md` for the design, `docs/FEATURES.md` for what is
 implemented and the known limitations, `docs/DATABASE.md` for the database
 choice, `docs/DEPLOYMENT.md` for the server, `docs/BOT.md` and `docs/CLIENT.md`
-for the two front ends, and `docs/API.md` for the HTTP API.
+for the two front ends, `docs/API.md` for the HTTP API, and
+`docs/NAME_HISTORY.md` for what name-history sources still exist and how a
+join-time rank check would use them.
 
 ## Quick start (one machine, for trying it out)
 
