@@ -62,6 +62,9 @@ class AdminConsole:
             "keys": (self.cmd_keys, "keys: list API keys"),
             "key": (self.cmd_key, "key create <name> <admin|staff|bot|readonly> | key revoke <id>"),
             "export": (self.cmd_export, "export preview: command count and skip reasons"),
+            "csv-batches": (self.cmd_csv_batches, "list trusted-CSV import batches"),
+            "csv-retire": (self.cmd_csv_retire, "csv-retire <batch id>: retire a batch so its file can be imported again"),
+            "package-map": (self.cmd_package_map, "package-map add \"<package name>\" <RANK> | remove \"<package name>\" | list: store packages that do not name their rank"),
             "backup": (self.cmd_backup, "backup: write a database backup into backups/"),
             "logs": (self.cmd_logs, "logs [n] [level]: recent log records"),
             "stop": (self.cmd_stop, "stop the server"),
@@ -447,6 +450,44 @@ class AdminConsole:
         lines += [f"  {c}" for c in p["commands"][:10]]
         lines += [f"WARNING: {w}" for w in p["warnings"]]
         return "\n".join(lines)
+
+    def cmd_csv_batches(self, args: list[str]) -> str:
+        from sqlalchemy import select
+
+        from rankrecovery.db.models import CsvBatch
+
+        with self.ctx.db.read_session() as s:
+            rows = s.execute(select(CsvBatch).order_by(CsvBatch.id.desc()).limit(20)).scalars().all()
+            return "\n".join(f"#{b.id} {b.filename} valid {b.valid_count} rejected {b.rejected_count} duplicates {b.duplicate_count} {'ACTIVE' if b.is_active else 'retired'} by {b.imported_by}" for b in rows) or "no batches"
+
+    def cmd_csv_retire(self, args: list[str]) -> str:
+        if not args or not args[0].isdigit():
+            return "usage: csv-retire <batch id>"
+        from rankrecovery.services.csvimport import CsvImportService
+
+        try:
+            result = CsvImportService(self.ctx).retire_batch(int(args[0]), actor="console", reason=" ".join(args[1:]) or "retired from console")
+        except KeyError:
+            return "no such batch"
+        job_id = self.runner.submit("recompute_players", {}, label="recompute after batch retire", created_by="console")
+        return f"retired {result['rows_retired']} row(s); recompute queued as job #{job_id}. The file can now be imported again."
+
+    def cmd_package_map(self, args: list[str]) -> str:
+        mapping = {str(k): str(v) for k, v in (self.ctx.settings.get("csv.package_rank_mapping") or {}).items()}
+        if args and args[0] == "list":
+            return "\n".join(f"{k!r} -> {v}" for k, v in sorted(mapping.items())) or "no package mappings"
+        if len(args) == 3 and args[0] == "add":
+            canonical = self.ctx.policy().canonical_rank(args[2])
+            if canonical is None:
+                return f"unknown rank {args[2]!r}"
+            mapping[args[1].strip().strip("'\"").lower()] = canonical
+            self.ctx.settings.set("csv.package_rank_mapping", mapping, changed_by="console")
+            return f"{args[1]!r} -> {canonical}; re-import (or retire and re-import) the CSV to apply"
+        if len(args) == 2 and args[0] == "remove":
+            mapping.pop(args[1].strip().strip("'\"").lower(), None)
+            self.ctx.settings.set("csv.package_rank_mapping", mapping, changed_by="console")
+            return "removed"
+        return 'usage: package-map add "<package name>" <RANK> | remove "<package name>" | list'
 
     def cmd_backup(self, args: list[str]) -> str:
         from rankrecovery.db.backup import backup_sqlite

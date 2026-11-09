@@ -83,6 +83,16 @@ def csv_rows(batch_id: int, request: Request, _: Principal = Depends(require(Api
         return [csv_row_dict(r) for r in rows]
 
 
+@router.post("/csv/batches/{batch_id}/retire")
+def csv_retire_batch(batch_id: int, body: CsvRowAction, request: Request, principal: Principal = Depends(require(ApiRole.ADMIN))) -> dict:
+    try:
+        result = CsvImportService(ctx_of(request)).retire_batch(batch_id, actor=principal.name, reason=body.reason)
+    except KeyError as exc:
+        raise not_found("batch") from exc
+    result["job_id"] = runner_of(request).submit("recompute_players", {}, label="recompute after batch retire", created_by=principal.name)
+    return result
+
+
 @router.post("/csv/rows/{row_id}/deactivate")
 def csv_deactivate(row_id: int, body: CsvRowAction, request: Request, principal: Principal = Depends(require(ApiRole.ADMIN))) -> dict:
     try:

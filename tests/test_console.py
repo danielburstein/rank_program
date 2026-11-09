@@ -59,6 +59,10 @@ def test_console_commands(tmp_path):
         assert "unknown rank" in console.run("alias add NOPE X")
         assert "now maps to MOD" in console.run("staff-alias add MOD MODERATORR")
         assert console.run("reparse").startswith("queued job #")
+        assert "no batches" in console.run("csv-batches")
+        assert "no such batch" in console.run("csv-retire 99")
+        assert "-> HERO" in console.run('package-map add "Mystery Crate" HERO')
+        assert "'mystery crate' -> HERO" in console.run("package-map list")
         assert "no such player" in console.run("lookups Nobody")
         assert "could not parse" in console.run('player "unterminated')
     finally:

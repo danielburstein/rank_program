@@ -120,6 +120,8 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "verification.unknown_submitter_counts_as_one_source": True,
     # --- trusted CSV ---
     "csv.treat_as_confirmed_exempt_from_verification": True,
+    "csv.accepted_statuses": ["complete", "completed", "paid", "success", "successful", "captured"],
+    "csv.package_rank_mapping": {},  # store package name (lower-case) -> rank, for names that do not contain the rank word
     # --- AI metadata ---
     "ai.metadata_indicators": DEFAULT_AI_METADATA_INDICATORS,
     "ai.filename_patterns": DEFAULT_AI_FILENAME_PATTERNS,

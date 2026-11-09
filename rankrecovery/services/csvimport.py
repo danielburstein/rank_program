@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,10 +41,61 @@ log = logging.getLogger(__name__)
 FIELD_CANDIDATES: dict[str, list[str]] = {
     "username": ["username", "name", "player", "player_name", "playername", "ign", "minecraft_name", "mc_name", "user"],
     "uuid": ["uuid", "player_uuid", "minecraft_uuid", "mc_uuid", "id", "unique_id", "uniqueid"],
-    "rank": ["rank", "old_rank", "oldrank", "package", "product", "group", "purchased_rank", "item"],
+    "rank": ["rank", "old_rank", "oldrank", "package", "packages", "package_name", "product", "products", "group", "purchased_rank", "item", "items"],
     "purchase_date": ["purchase_date", "date", "purchased_at", "created_at", "time", "timestamp", "order_date"],
     "transaction_id": ["transaction_id", "transaction", "txn", "order_id", "orderid", "order", "payment_id", "id_transaction"],
+    "status": ["status", "payment_status", "order_status", "state"],
 }
+
+DEFAULT_ACCEPTED_STATUSES = ["complete", "completed", "paid", "success", "successful", "captured"]
+
+_PACKAGE_SPLIT_RE = re.compile(r"""['"]\s*,\s*['"]|;|\|""")
+_RANK_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z+]*")
+
+
+def rank_from_package_text(text: str, policy: Any, package_mapping: dict[str, str] | None = None) -> tuple[str | None, str]:
+    """Derive the purchased rank from a rank name or a store package name.
+
+    Handles Tebex-style package lists ("'Galactic to Infinite', 'Fly perk'"):
+    an explicit mapping wins, then an exact rank/alias, then rank words inside
+    the package name, where "X to Y" upgrades yield Y and several ranks yield
+    the highest. Returns (canonical rank or None, note).
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None, "missing rank"
+    mapping = {str(k).strip().strip("'\"").lower(): str(v) for k, v in (package_mapping or {}).items()}
+    parts = [p.strip().strip("'\"").strip() for p in _PACKAGE_SPLIT_RE.split(raw.strip("'\""))]
+    parts = [p for p in parts if p]
+    found: list[str] = []
+    unknown: list[str] = []
+    for part in parts:
+        key = part.lower()
+        if key in mapping:
+            canonical = policy.canonical_rank(mapping[key])
+            if canonical:
+                found.append(canonical)
+                continue
+        direct = policy.canonical_rank(part)
+        if direct:
+            found.append(direct)
+            continue
+        tokens = _RANK_TOKEN_RE.findall(part)
+        ranks_in_order = [(i, policy.canonical_rank(tok)) for i, tok in enumerate(tokens)]
+        ranks_in_order = [(i, r) for i, r in ranks_in_order if r]
+        if not ranks_in_order:
+            unknown.append(part)
+            continue
+        lowered = [t.lower() for t in tokens]
+        if "to" in lowered and len(ranks_in_order) >= 2:
+            found.append(ranks_in_order[-1][1])  # upgrade: the target rank
+        else:
+            found.append(policy.max_rank([r for _, r in ranks_in_order]))
+    if not found:
+        return None, f"unknown rank/package {raw!r}"
+    best = policy.max_rank(found)
+    note = "" if not unknown else f"ignored non-rank package(s): {', '.join(unknown)}"
+    return best, note
 
 
 @dataclass(slots=True)
@@ -165,12 +217,17 @@ class CsvImportService:
             username = check.normalised or username
         if not username and not uuid:
             errors.append("row has neither username nor UUID")
+        status_raw = get("status")
+        if status_raw:
+            accepted = [str(x).lower() for x in (self.ctx.settings.get("csv.accepted_statuses") or DEFAULT_ACCEPTED_STATUSES)]
+            if status_raw.lower() not in accepted:
+                errors.append(f"payment status {status_raw!r} is not a completed payment")
         rank_raw = get("rank")
-        rank_canonical = policy.canonical_rank(rank_raw) if rank_raw else None
-        if not rank_raw:
-            errors.append("missing rank")
-        elif rank_canonical is None:
-            errors.append(f"unknown rank {rank_raw!r}")
+        rank_canonical, rank_note = rank_from_package_text(rank_raw, policy, self.ctx.settings.get("csv.package_rank_mapping") or {}) if rank_raw else (None, "missing rank")
+        if rank_canonical is None:
+            errors.append(rank_note or f"unknown rank {rank_raw!r}")
+        elif rank_note:
+            warnings.append(rank_note)
         purchase_date = get("purchase_date") or None
         transaction_id = get("transaction_id") or None
         payload = json.dumps({"u": (username or "").lower(), "id": uuid or "", "r": rank_canonical or rank_raw.upper(), "d": purchase_date or "", "t": transaction_id or ""}, sort_keys=True)
@@ -196,7 +253,7 @@ class CsvImportService:
     def commit(self, content: bytes, *, filename: str, mapping: dict[str, str | None] | None = None, delimiter: str | None = None, reject_invalid: bool = True, actor: str = "", notes: str = "", source: str = "file") -> dict[str, Any]:
         preview = self.preview(content, filename=filename, mapping=mapping, delimiter=delimiter)
         if preview.already_imported_batch_id is not None:
-            return {"batch_id": preview.already_imported_batch_id, "status": "already_imported", "summary": preview.summary}
+            return {"batch_id": preview.already_imported_batch_id, "status": "already_imported", "summary": preview.summary, "hint": "retire that batch first (console: csv-retire <id>) to import this file again"}
         if not reject_invalid and any(r.status == "invalid" for r in preview.rows):
             return {"batch_id": None, "status": "rejected", "summary": preview.summary, "errors": [{"row": r.row_number, "errors": r.errors} for r in preview.rows if r.status == "invalid"]}
         policy = self.ctx.policy()
@@ -321,6 +378,34 @@ class CsvImportService:
         # make the batch hash unique per manual entry so re-adding is explicit
         content += f"\n# manual {actor} {hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()}\n".encode()
         return self.commit(content, filename=f"manual-{actor}.csv", actor=actor, notes=reason, source="manual")
+
+    def retire_batch(self, batch_id: int, *, actor: str, reason: str) -> dict[str, int]:
+        """Retire a whole import batch so its file can be imported again (rows and evidence kept, inactive)."""
+        with self.ctx.db.write_session() as s:
+            batch = s.get(CsvBatch, batch_id)
+            if batch is None:
+                raise KeyError(batch_id)
+            rows = 0
+            touched: set[int] = set()
+            for row in batch.rows:
+                if row.is_active:
+                    row.is_active = False
+                    row.deactivated_reason = f"batch retired: {reason}"
+                    rows += 1
+                for obs in s.execute(select(RankObservation).where(RankObservation.csv_row_id == row.id, RankObservation.is_active.is_(True))).scalars():
+                    obs.is_active = False
+                    obs.deactivated_reason = f"batch retired: {reason}"
+                if row.player_id:
+                    touched.add(row.player_id)
+            batch.is_active = False
+            if not batch.sha256.startswith("retired-"):
+                batch.sha256 = f"retired-{batch.id}-{batch.sha256}"[:64]
+            for pid in touched:
+                summary = s.execute(select(PlayerSummary).where(PlayerSummary.player_id == pid)).scalars().first()
+                if summary:
+                    summary.stale = True
+            audit(s, actor=actor, action="csv.batch_retired", entity_type="csv_batch", entity_id=batch_id, note=reason, after={"rows": rows})
+            return {"rows_retired": rows, "players_touched": len(touched)}
 
     def deactivate_row(self, row_id: int, *, actor: str, reason: str) -> None:
         with self.ctx.db.write_session() as s:

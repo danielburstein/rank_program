@@ -92,6 +92,15 @@ dashes), `rank` (old rank or seasonal alias such as SOLAR/COSMIC), optional
 one of username or UUID. UTF-8 with BOM, `;` and tab delimiters are detected.
 Examples: `examples/purchases_*.csv` (templates only, never imported).
 
+Store exports work directly: a Tebex payments CSV maps `Username`, `Uuid`,
+`Date`, `Transaction ID` and `Packages` automatically, only `Complete`
+payments count (the accepted statuses are a setting), and the rank is read
+from the package name: `'Galactic to Infinite'` proves INFINITE, `'Immortal
+Rank', 'Fly Perk'` proves IMMORTAL. Packages that do not name a rank are
+listed as unknown; map them once with `package-map add "<package>" <RANK>`
+in the console (or the `csv.package_rank_mapping` setting), retire the batch
+with `csv-retire <id>` and import the file again.
+
 ## Old usernames that have since changed
 
 Mojang's lookup only knows who holds a name *today*, and no open service
