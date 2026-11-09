@@ -53,6 +53,9 @@ class AdminConsole:
             "players": (self.cmd_players, "players [search]: list players"),
             "identity-import": (self.cmd_identity_import, "identity-import <file> [--create]: import username/UUID pairs from usercache.json or a CSV (old server records)"),
             "names": (self.cmd_names, "names [--force]: fetch current Mojang names for players with a known UUID"),
+            "claims": (self.cmd_claims, "claims: pending old-name claims from Discord"),
+            "claim": (self.cmd_claim, "claim approve <id> [note] | claim reject <id> <reason>"),
+            "link-old": (self.cmd_link_old, "link-old <old name> <current name> [--force]: give the current account the old name's rank"),
             "lookups": (self.cmd_lookups, "lookups <name> [n]: recent UUID lookup attempts for a player, with status, failure code and the raw response excerpt"),
             "player": (self.cmd_player, "player <name>: full summary for one player"),
             "images": (self.cmd_images, "images [n]: recent images"),
@@ -303,6 +306,40 @@ class AdminConsole:
     def cmd_names(self, args: list[str]) -> str:
         job_id = self.runner.submit("refresh_names", {"force": "--force" in args}, label="refresh current names", created_by="console")
         return f"queued job #{job_id}"
+
+    def cmd_claims(self, args: list[str]) -> str:
+        from rankrecovery.services.identity import IdentityService
+
+        claims = IdentityService(self.ctx).list_claims(status="pending")
+        return "\n".join(f"#{c['claim_id']} {c.get('old_username')} -> {c.get('current_username')} ({c.get('uuid')}) rank {c.get('effective_rank') or 'none'} by {c.get('discord_username') or c.get('created_by')}{' CONFLICT' if c.get('conflict_with') else ''}" for c in claims) or "no pending claims"
+
+    def cmd_claim(self, args: list[str]) -> str:
+        if len(args) < 2 or args[0] not in ("approve", "reject") or not args[1].isdigit():
+            return "usage: claim approve <id> [note] | claim reject <id> <reason>"
+        from rankrecovery.services.identity import IdentityService
+
+        note = " ".join(args[2:])
+        try:
+            result = IdentityService(self.ctx).decide_claim(int(args[1]), approve=args[0] == "approve", actor="console", note=note, force="--force" in args)
+        except KeyError:
+            return "no such claim"
+        except ValueError as exc:
+            return f"refused: {exc}"
+        return f"claim #{args[1]} {result['status']}: {result.get('old_username')} -> {result.get('current_username')} ({result.get('uuid')})"
+
+    def cmd_link_old(self, args: list[str]) -> str:
+        names = [a for a in args if not a.startswith("--")]
+        if len(names) < 2:
+            return "usage: link-old <old name> <current name> [--force]"
+        from rankrecovery.services.identity import IdentityService
+
+        try:
+            result = IdentityService(self.ctx).link_by_names(names[0], names[1], actor="console", note=" ".join(names[2:]), force="--force" in args)
+        except KeyError as exc:
+            return str(exc).strip("'")
+        except ValueError as exc:
+            return f"refused: {exc}"
+        return f"{names[0]} -> {result['current_username']} ({result['uuid']}) linked; merged {result['merged']} duplicate record(s); recomputed"
 
     def cmd_lookups(self, args: list[str]) -> str:
         if not args:

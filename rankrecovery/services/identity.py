@@ -394,6 +394,155 @@ class IdentityService:
                     log.warning("auto-merge skipped for %s/%s: %s", survivor, other, exc)
         return merged
 
+    # ------------------------------------------------------------- name claims
+    def create_claim(self, *, old_username: str, current_username: str, actor: str, discord_user_id: str | None = None, discord_username: str | None = None, note: str = "", service: Any | None = None, auto_apply: bool = False) -> dict[str, Any]:
+        """Record "old name X is now current account Y" for staff approval (or apply it when staff say so).
+
+        The current name is resolved to a UUID right away (Mojang, or Geyser for
+        Bedrock names) so the claim pins a specific account; the old name must
+        already have evidence in the database.
+        """
+        service = service or self.build_lookup_service()
+        result = service.resolve(current_username)
+        if not result.resolved or not result.uuid:
+            raise ValueError(f"no Minecraft account is currently named {current_username!r} ({result.failure_code or result.outcome.value})")
+        uuid = normalise_uuid(result.uuid)
+        with self.ctx.db.write_session() as s:
+            old_player = find_player_by_username(s, old_username)
+            if old_player is None:
+                raise KeyError(f"no evidence recorded for old name {old_username!r}")
+            conflict = old_player.canonical_uuid if old_player.canonical_uuid and old_player.canonical_uuid != uuid and old_player.identity_status in (IdentityStatus.VERIFIED.value, IdentityStatus.MANUAL.value) else None
+            details = {
+                "old_username": old_player.display_name,
+                "current_username": result.current_name or current_username,
+                "uuid": uuid,
+                "discord_user_id": discord_user_id,
+                "discord_username": discord_username,
+                "status": "pending",
+                "conflict_with": conflict,
+                "lookup_provider": result.provider,
+            }
+            claim = ManualAssertion(player_id=old_player.id, kind="identity_claim", value=uuid, details=details, reason=note or "name claim", created_by=actor)
+            s.add(claim)
+            s.flush()
+            upsert_flags(s, "player", old_player.id, [FlagInstance("IDENTITY_CLAIM_PENDING", f"{details['current_username']} ({uuid}) claims old name {old_player.display_name}", evidence_ref=f"claim:{claim.id}")], actor=actor, source="manual")
+            audit(s, actor=actor, action="identity.claim_created", entity_type="player", entity_id=old_player.id, after={k: v for k, v in details.items()}, note=note)
+            claim_id = claim.id
+            player_id = old_player.id
+        out = {"claim_id": claim_id, "player_id": player_id, "status": "pending", **details}
+        if auto_apply:
+            out = self.decide_claim(claim_id, approve=True, actor=actor, note=note or "applied by staff", force=False)
+        return out
+
+    def list_claims(self, *, status: str = "pending", limit: int = 100) -> list[dict[str, Any]]:
+        with self.ctx.db.read_session() as s:
+            rows = s.execute(select(ManualAssertion).where(ManualAssertion.kind == "identity_claim").order_by(ManualAssertion.id.desc()).limit(500)).scalars().all()
+            out = []
+            for c in rows:
+                details = dict(c.details or {})
+                if status != "all" and details.get("status", "pending") != status:
+                    continue
+                player = s.get(Player, c.player_id) if c.player_id else None
+                summary = s.execute(select(PlayerSummary).where(PlayerSummary.player_id == c.player_id)).scalars().first() if c.player_id else None
+                out.append({"claim_id": c.id, "player_id": c.player_id, "created_by": c.created_by, "created_at": c.created_at.isoformat() if c.created_at else None, "note": c.reason, "effective_rank": summary.effective_rank if summary else None, "old_player_uuid": player.canonical_uuid if player else None, **details})
+                if len(out) >= limit:
+                    break
+            return out
+
+    def decide_claim(self, claim_id: int, *, approve: bool, actor: str, note: str = "", force: bool = False) -> dict[str, Any]:
+        with self.ctx.db.read_session() as s:
+            claim = s.get(ManualAssertion, claim_id)
+            if claim is None or claim.kind != "identity_claim":
+                raise KeyError(claim_id)
+            details = dict(claim.details or {})
+            player_id = claim.player_id
+        if details.get("status") != "pending":
+            raise ValueError(f"claim {claim_id} is already {details.get('status')}")
+        if approve:
+            result = self.link_names(player_id, details["uuid"], details["current_username"], actor=actor, source="claim_approved", note=note or f"claim #{claim_id} approved", force=force)
+        with self.ctx.db.write_session() as s:
+            claim = s.get(ManualAssertion, claim_id)
+            details["status"] = "approved" if approve else "rejected"
+            details["decided_by"] = actor
+            details["decision_note"] = note
+            claim.details = details
+            claim.is_active = approve
+            from rankrecovery.db.models import Flag
+
+            for f in s.execute(select(Flag).where(Flag.entity_type == "player", Flag.entity_id == player_id, Flag.code == "IDENTITY_CLAIM_PENDING", Flag.is_active.is_(True))).scalars():
+                f.is_active = False
+                f.resolved_at = datetime.now(UTC)
+                f.resolved_by = actor
+                f.resolution_note = f"claim {details['status']}: {note}"
+            audit(s, actor=actor, action=f"identity.claim_{details['status']}", entity_type="player", entity_id=player_id, after=details, note=note)
+        out = {"claim_id": claim_id, "player_id": player_id, **details}
+        if approve:
+            out.update(result)
+        return out
+
+    def link_names(self, old_player_id: int, uuid: str, current_username: str, *, actor: str, source: str = "staff_link", note: str = "", force: bool = False) -> dict[str, Any]:
+        """Give the old-name player the current account's UUID and name; merge with an existing record of that account."""
+        uuid_norm = normalise_uuid(uuid)
+        if uuid_norm is None:
+            raise ValueError("invalid UUID")
+        with self.ctx.db.write_session() as s:
+            player = s.get(Player, old_player_id)
+            if player is None:
+                raise KeyError(old_player_id)
+            player = resolve_survivor(s, player)
+            if player.canonical_uuid and player.canonical_uuid != uuid_norm and player.identity_status in (IdentityStatus.VERIFIED.value, IdentityStatus.MANUAL.value) and not force:
+                raise ValueError(f"{player.display_name} already has verified UUID {player.canonical_uuid} ({player.identity_source}); refusing to relink without force")
+            # The current name may already have its own record (e.g. from a newer screenshot). Merge it in so one
+            # player carries both names' evidence; refuse when that record is verified as a different account.
+            other = find_player_by_username(s, current_username)
+            other_id: int | None = None
+            if other is not None and other.id != player.id:
+                if other.canonical_uuid and other.canonical_uuid != uuid_norm and other.identity_status in (IdentityStatus.VERIFIED.value, IdentityStatus.MANUAL.value) and not force:
+                    raise ValueError(f"{current_username} is already recorded as a different verified account {other.canonical_uuid} ({other.identity_source}); refusing to link without force")
+                other_id = other.id
+            before = {"uuid": player.canonical_uuid, "status": player.identity_status, "current_name": player.current_name}
+            for old in s.execute(select(IdentityResolution).where(IdentityResolution.player_id == player.id, IdentityResolution.is_active.is_(True))).scalars():
+                old.is_active = False
+            player.canonical_uuid = uuid_norm
+            player.current_name = current_username
+            player.identity_status = IdentityStatus.MANUAL.value
+            player.identity_source = source
+            add_alias(s, player, current_username, source=source)
+            s.add(IdentityResolution(player_id=player.id, uuid=uuid_norm, status=IdentityStatus.MANUAL.value, source=source, queried_name=current_username, current_name=current_username, note=note))
+            audit(s, actor=actor, action="identity.link_names", entity_type="player", entity_id=player.id, before=before, after={"uuid": uuid_norm, "current_name": current_username, "source": source}, note=note)
+            summary = s.execute(select(PlayerSummary).where(PlayerSummary.player_id == player.id)).scalars().first()
+            if summary:
+                summary.stale = True
+            survivor_id = player.id
+            old_display = player.display_name
+        merged = 0
+        if other_id is not None:
+            self.merge(survivor_id, other_id, actor=actor, reason=f"{current_username} is the current name of {old_display} ({source})", allow_uuid_conflict=force)
+            merged += 1
+        merged += self.auto_merge_shared_uuids(actor=actor)
+        from rankrecovery.services.conversion import ConversionService
+        from rankrecovery.services.reconcile import ReconcileService
+
+        recon = ReconcileService(self.ctx)
+        with self.ctx.db.read_session() as s:
+            survivor = resolve_survivor(s, s.get(Player, survivor_id))
+            survivor_id = survivor.id
+        recon.recompute_player(survivor_id)
+        ConversionService(self.ctx).recompute([survivor_id])
+        return {"player_id": survivor_id, "uuid": uuid_norm, "current_username": current_username, "merged": merged}
+
+    def link_by_names(self, old_username: str, current_username: str, *, actor: str, note: str = "", force: bool = False, service: Any | None = None) -> dict[str, Any]:
+        service = service or self.build_lookup_service()
+        result = service.resolve(current_username)
+        if not result.resolved or not result.uuid:
+            raise ValueError(f"no Minecraft account is currently named {current_username!r} ({result.failure_code or result.outcome.value})")
+        with self.ctx.db.read_session() as s:
+            player = find_player_by_username(s, old_username)
+            if player is None:
+                raise KeyError(f"no evidence recorded for old name {old_username!r}")
+            player_id = player.id
+        return self.link_names(player_id, result.uuid, result.current_name or current_username, actor=actor, source="staff_link", note=note, force=force)
+
     # ----------------------------------------------------- server-record import
     def import_identity_records(self, content: bytes, *, filename: str, actor: str, create_missing: bool = False) -> dict[str, Any]:
         """Import username<->UUID pairs from the old server's own records.

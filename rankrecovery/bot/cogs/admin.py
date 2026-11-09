@@ -89,6 +89,65 @@ class AdminCog(commands.Cog, name="Admin"):
             return
         await interaction.followup.send(search_results_text(players))
 
+    @rr.command(name="claims", description="List pending old-name claims")
+    @staff_only()
+    async def claims(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            claims = await api_of(interaction).list_claims("pending", limit=20)
+        except ApiError as exc:
+            await interaction.followup.send(f"Could not fetch claims: {exc.message}")
+            return
+        if not claims:
+            await interaction.followup.send("No pending claims.")
+            return
+        lines = [
+            f"#{c['claim_id']} **{discord.utils.escape_markdown(c.get('old_username', '?'))}** → **{discord.utils.escape_markdown(c.get('current_username', '?'))}** (`{c.get('uuid')}`) · rank on file: {c.get('effective_rank') or 'none'}"
+            + (f" · by {c.get('discord_username')}" if c.get("discord_username") else "")
+            + (" · ⚠️ conflicts with a verified UUID" if c.get("conflict_with") else "")
+            for c in claims
+        ]
+        await interaction.followup.send("Pending claims (approve with `/rr approve <id>`, reject with `/rr reject <id> <reason>`):\n" + "\n".join(lines)[:1900])
+
+    @rr.command(name="approve", description="Approve an old-name claim: the current account receives the old name's rank")
+    @app_commands.describe(claim_id="Claim number from /rr claims", note="Optional note", force="Override an existing verified UUID (use with care)")
+    @staff_only()
+    async def approve(self, interaction: discord.Interaction, claim_id: int, note: str = "", force: bool = False) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            result = await api_of(interaction).decide_claim(claim_id, approve=True, note=note or f"approved by {interaction.user}", force=force)
+        except ApiError as exc:
+            await interaction.followup.send("No such claim." if exc.status == 404 else f"Could not approve: {exc.message}")
+            return
+        await interaction.followup.send(f"Approved claim #{claim_id}: **{discord.utils.escape_markdown(result.get('old_username', '?'))}** is now **{discord.utils.escape_markdown(result.get('current_username', '?'))}** (`{result.get('uuid')}`). The rank summary has been recomputed.")
+
+    @rr.command(name="reject", description="Reject an old-name claim")
+    @app_commands.describe(claim_id="Claim number from /rr claims", reason="Why it is rejected")
+    @staff_only()
+    async def reject(self, interaction: discord.Interaction, claim_id: int, reason: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await api_of(interaction).decide_claim(claim_id, approve=False, note=reason)
+        except ApiError as exc:
+            await interaction.followup.send("No such claim." if exc.status == 404 else f"Could not reject: {exc.message}")
+            return
+        await interaction.followup.send(f"Rejected claim #{claim_id}.")
+
+    @rr.command(name="link-old", description="Staff: connect an old username to a player's current username right away")
+    @app_commands.describe(old_name="Username in the old screenshots", current_name="The player's current Minecraft username", note="Optional note", force="Override an existing verified UUID (use with care)")
+    @staff_only()
+    async def link_old(self, interaction: discord.Interaction, old_name: str, current_name: str, note: str = "", force: bool = False) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            result = await api_of(interaction).link_names(old_name.strip(), current_name.strip(), note=note or f"linked by {interaction.user}", force=force)
+        except ApiError as exc:
+            if exc.status == 404:
+                await interaction.followup.send(f"No evidence recorded for **{discord.utils.escape_markdown(old_name)}**.")
+            else:
+                await interaction.followup.send(f"Could not link: {exc.message}")
+            return
+        await interaction.followup.send(f"**{discord.utils.escape_markdown(old_name)}** → **{discord.utils.escape_markdown(result.get('current_username', current_name))}** (`{result.get('uuid')}`) linked and recomputed. `/rank {discord.utils.escape_markdown(result.get('current_username', current_name))}` now shows the recovered rank.")
+
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
         text = str(error) if isinstance(error, NotStaff) else "Something went wrong handling that command."
         if not isinstance(error, NotStaff):

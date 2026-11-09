@@ -113,6 +113,18 @@ usercache.json`) or the desktop client, then run `names` to fetch every
 account's current Mojang name. Conflicting records are flagged for review
 rather than overwritten.
 
+## Players who changed their name
+
+A player types `/claim OldName` in Discord (their current name comes from
+`/link`, or they pass it as the second option). The bot resolves the current
+name to its account and records a pending claim; staff check it (`/rr claims`)
+and approve (`/rr approve <id>`) or reject it. Staff can also link the two
+names directly with `/rr link-old OldName NewName`, or `link-old` in the panel
+console. On approval the old record gets the account's UUID and the new name
+as an alias, so `/rank NewName` answers and the export targets the right UUID.
+A claim that contradicts a verified UUID on file is shown with a warning and
+needs `force` to apply.
+
 ## Proxies for UUID lookups
 
 Optional. Paste or load a TXT list in **Settings › Lookup** (one proxy per line;

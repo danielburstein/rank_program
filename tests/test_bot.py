@@ -234,9 +234,9 @@ async def test_create_bot_registers_commands():
     bot = await create_bot(FakeSettings(), FakeApi())
     try:
         names = {c.name for c in bot.tree.get_commands()}
-        assert {"rank", "myrank", "link", "unlink", "submit", "rr"} <= names
+        assert {"rank", "myrank", "link", "unlink", "claim", "submit", "rr"} <= names
         rr = next(c for c in bot.tree.get_commands() if c.name == "rr")
-        assert {c.name for c in rr.commands} == {"status", "job", "recompute", "find"}
+        assert {c.name for c in rr.commands} == {"status", "job", "recompute", "find", "claims", "approve", "reject", "link-old"}
         assert {c.name for c in bot.tree.get_commands(type=AppCommandType.user)} == {"Rank lookup"}
         assert {c.name for c in bot.tree.get_commands(type=AppCommandType.message)} == {"Submit screenshots"}
         submit = next(c for c in bot.tree.get_commands() if c.name == "submit")

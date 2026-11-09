@@ -113,6 +113,35 @@ class RankCog(commands.Cog, name="Rank"):
         status = "verified by staff" if link.get("verified") else "unverified"
         await interaction.response.send_message(f"{who} now linked to **{discord.utils.escape_markdown(username)}** ({status}).", ephemeral=True)
 
+    @app_commands.command(name="claim", description="Tell staff that an old username in the screenshots is your current account")
+    @app_commands.describe(old_name="Your username back then, as it appears in the old screenshots", current_name="Your current Minecraft username (defaults to your /link name)")
+    async def claim(self, interaction: discord.Interaction, old_name: str, current_name: str | None = None) -> None:
+        old_name = old_name.strip()
+        current = (current_name or "").strip() or await self._linked_username(interaction, interaction.user)
+        if not old_name or len(old_name) > 20:
+            await interaction.response.send_message("Please give a valid old username.", ephemeral=True)
+            return
+        if not current:
+            await interaction.response.send_message("Give your current username, or run `/link <current username>` first.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            claim = await api_of(interaction).create_claim(old_name, current, discord_user_id=str(interaction.user.id), discord_username=str(interaction.user), note=f"claimed via Discord by {interaction.user}")
+        except ApiError as exc:
+            if exc.status == 404:
+                await interaction.followup.send(f"No evidence has been recorded for **{discord.utils.escape_markdown(old_name)}** yet, so there is nothing to claim. Ask staff to submit a screenshot first.")
+            elif exc.status == 400:
+                await interaction.followup.send(f"Could not record the claim: {exc.message}")
+            else:
+                log.warning("claim failed: %s", exc)
+                await interaction.followup.send("Could not record the claim right now. Please try again later.")
+            return
+        warning = f"\n⚠️ Note: {discord.utils.escape_markdown(old_name)} already has a verified account on file; staff will have to check this carefully." if claim.get("conflict_with") else ""
+        await interaction.followup.send(
+            f"Claim #{claim['claim_id']} recorded: **{discord.utils.escape_markdown(claim['old_username'])}** → **{discord.utils.escape_markdown(claim['current_username'])}** (`{claim['uuid']}`). "
+            f"Staff will verify it; once approved, `/rank {discord.utils.escape_markdown(claim['current_username'])}` shows your recovered rank.{warning}"
+        )
+
     @app_commands.command(name="unlink", description="Remove your Minecraft username link")
     async def unlink(self, interaction: discord.Interaction) -> None:
         try:

@@ -121,6 +121,18 @@ class RankApiClient:
         result = await self._request("DELETE", f"/discord/link/{discord_user_id}", allow_404=True)
         return result is not None
 
+    async def create_claim(self, old_username: str, current_username: str, *, discord_user_id: str | None, discord_username: str | None, note: str = "") -> dict[str, Any]:
+        return await self._request("POST", "/identity/claims", json={"old_username": old_username, "current_username": current_username, "discord_user_id": discord_user_id, "discord_username": discord_username, "note": note})
+
+    async def list_claims(self, status: str = "pending", *, limit: int = 25) -> list[dict[str, Any]]:
+        return await self._request("GET", "/identity/claims", params={"status": status, "limit": limit})
+
+    async def decide_claim(self, claim_id: int, *, approve: bool, note: str = "", force: bool = False) -> dict[str, Any]:
+        return await self._request("POST", f"/identity/claims/{claim_id}/{'approve' if approve else 'reject'}", json={"note": note, "force": force})
+
+    async def link_names(self, old_username: str, current_username: str, *, note: str = "", force: bool = False) -> dict[str, Any]:
+        return await self._request("POST", "/identity/link-names", json={"old_username": old_username, "current_username": current_username, "note": note, "force": force})
+
     async def pending_detections(self, username: str | None = None, *, limit: int = 25) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"limit": limit}
         if username:

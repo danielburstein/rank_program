@@ -13,6 +13,9 @@ that can reach it.
 | `/myrank` | everyone | Same, for the caller's linked username. |
 | `/link <username> [member]` | everyone / staff | Links the caller's Discord account to a Minecraft username (unverified). Staff can link another `member`; that link is stored as verified. |
 | `/unlink` | everyone | Removes the caller's link. |
+| `/claim <old_name> [current_name]` | everyone | "That old username in the screenshots is me." The current name (default: the caller's `/link` name) is resolved to its account right away; staff approve or reject the claim. |
+| `/rr claims`, `/rr approve <id> [note] [force]`, `/rr reject <id> <reason>` | staff | Review claims. Approval gives the old-name record the current account's UUID and name, merges any separate record of the new name, and recomputes the rank. |
+| `/rr link-old <old_name> <current_name> [note] [force]` | staff | Same link applied immediately, without a claim. |
 | *User context menu* → **Rank lookup** | everyone | Rank summary for a member's linked username. |
 | `/submit screenshot1 [screenshot2..5] [submitter] [note]` | staff | Uploads up to five screenshots to the server, starts extraction and reports progress. |
 | *Message context menu* → **Submit screenshots** | staff | Takes every image attachment on the right-clicked message and submits it; the message author's linked name (or display name) is the default submitter. |

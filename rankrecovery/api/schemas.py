@@ -203,6 +203,26 @@ class DiscordLinkBody(BaseModel):
     verified: bool = False
 
 
+class ClaimCreate(BaseModel):
+    old_username: str
+    current_username: str
+    discord_user_id: str | None = None
+    discord_username: str | None = None
+    note: str = ""
+
+
+class ClaimDecision(BaseModel):
+    note: str = ""
+    force: bool = False
+
+
+class LinkNames(BaseModel):
+    old_username: str
+    current_username: str
+    note: str = ""
+    force: bool = False
+
+
 class ApiKeyCreate(BaseModel):
     name: str
     role: str = "readonly"

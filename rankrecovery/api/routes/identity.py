@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from rankrecovery.api.auth import Principal, require
 from rankrecovery.api.routes._common import bad_request, ctx_of, not_found, runner_of
-from rankrecovery.api.schemas import LookupRequest, MergeRequest, Note
+from rankrecovery.api.schemas import ClaimCreate, ClaimDecision, LinkNames, LookupRequest, MergeRequest, Note
 from rankrecovery.core.enums import ApiRole
 from rankrecovery.services.identity import IdentityService
 
@@ -50,6 +50,53 @@ def unmerge(merge_id: int, body: Note, request: Request, principal: Principal = 
         raise not_found("merge") from exc
     job_id = runner_of(request).submit("recompute_players", {}, label="recompute after unmerge", created_by=principal.name)
     return {"ok": True, "job_id": job_id}
+
+
+@router.post("/identity/claims")
+def create_claim(body: ClaimCreate, request: Request, principal: Principal = Depends(require(ApiRole.BOT))) -> dict:
+    """A player (via the bot) or staff records that old name X belongs to current account Y."""
+    try:
+        return IdentityService(ctx_of(request)).create_claim(old_username=body.old_username, current_username=body.current_username, actor=principal.name, discord_user_id=body.discord_user_id, discord_username=body.discord_username, note=body.note)
+    except KeyError as exc:
+        raise not_found(str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise bad_request(exc) from exc
+
+
+@router.get("/identity/claims")
+def list_claims(request: Request, status: str = "pending", limit: int = 100, _: Principal = Depends(require(ApiRole.STAFF))) -> list[dict]:
+    return IdentityService(ctx_of(request)).list_claims(status=status, limit=limit)
+
+
+@router.post("/identity/claims/{claim_id}/approve")
+def approve_claim(claim_id: int, body: ClaimDecision, request: Request, principal: Principal = Depends(require(ApiRole.STAFF))) -> dict:
+    try:
+        return IdentityService(ctx_of(request)).decide_claim(claim_id, approve=True, actor=principal.name, note=body.note, force=body.force)
+    except KeyError as exc:
+        raise not_found("claim") from exc
+    except ValueError as exc:
+        raise bad_request(exc) from exc
+
+
+@router.post("/identity/claims/{claim_id}/reject")
+def reject_claim(claim_id: int, body: ClaimDecision, request: Request, principal: Principal = Depends(require(ApiRole.STAFF))) -> dict:
+    try:
+        return IdentityService(ctx_of(request)).decide_claim(claim_id, approve=False, actor=principal.name, note=body.note)
+    except KeyError as exc:
+        raise not_found("claim") from exc
+    except ValueError as exc:
+        raise bad_request(exc) from exc
+
+
+@router.post("/identity/link-names")
+def link_names(body: LinkNames, request: Request, principal: Principal = Depends(require(ApiRole.STAFF))) -> dict:
+    """Staff: old name X is current account Y; applied immediately with an audit entry."""
+    try:
+        return IdentityService(ctx_of(request)).link_by_names(body.old_username, body.current_username, actor=principal.name, note=body.note, force=body.force)
+    except KeyError as exc:
+        raise not_found(str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise bad_request(exc) from exc
 
 
 @router.post("/identity/import")
