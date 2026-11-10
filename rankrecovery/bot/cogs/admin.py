@@ -77,7 +77,7 @@ class AdminCog(commands.Cog, name="Admin"):
             return
         await interaction.followup.send(content="Recomputed from stored evidence:", embed=rank_embed(detail, staff_view=True))
 
-    @rr.command(name="lookup", description="Find UUIDs for every player still missing one: Mojang first, then the last account that held the old name")
+    @rr.command(name="lookup", description="Find UUIDs for players missing one: Mojang first, then the last account that held the name")
     @app_commands.describe(retry_failed="Only names whose last lookup failed", force="Ignore cached answers")
     @staff_only()
     async def lookup(self, interaction: discord.Interaction, retry_failed: bool = False, force: bool = False) -> None:

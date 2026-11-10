@@ -226,6 +226,40 @@ class FakeApi:
         return None
 
 
+async def test_every_command_fits_discord_limits():
+    """Discord rejects the whole sync when one description is over 100 characters (seen live on /rr lookup)."""
+    from discord import app_commands
+
+    from rankrecovery.bot.main import create_bot
+
+    bot = await create_bot(FakeSettings(), FakeApi())
+    try:
+        problems: list[str] = []
+
+        def check(command, path: str) -> None:
+            if isinstance(command, app_commands.Group):
+                for sub in command.commands:
+                    check(sub, f"{path} {sub.name}")
+                return
+            if isinstance(command, app_commands.ContextMenu):
+                if len(command.name) > 32:
+                    problems.append(f"{path}: name too long")
+                return
+            if not 1 <= len(command.description) <= 100:
+                problems.append(f"{path}: description {len(command.description)} chars")
+            if len(command.name) > 32:
+                problems.append(f"{path}: name too long")
+            for param in getattr(command, "parameters", []):
+                if not 1 <= len(param.description) <= 100:
+                    problems.append(f"{path} <{param.name}>: description {len(param.description)} chars")
+
+        for command in bot.tree.get_commands():
+            check(command, f"/{command.name}")
+        assert problems == [], problems
+    finally:
+        await bot.close()
+
+
 async def test_create_bot_registers_commands():
     from discord import AppCommandType
 
