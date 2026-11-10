@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 MIN_PYTHON = (3, 11)
-SENTINEL_MODULES = ("fastapi", "uvicorn", "sqlalchemy", "alembic", "pydantic_settings", "PIL", "numpy", "imagehash", "httpx", "anthropic", "discord")
+SENTINEL_MODULES = ("fastapi", "uvicorn", "sqlalchemy", "alembic", "pydantic_settings", "PIL", "numpy", "imagehash", "httpx", "anthropic", "discord", "gdown")
 
 
 def check_python() -> None:
