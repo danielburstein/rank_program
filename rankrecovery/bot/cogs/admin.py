@@ -77,6 +77,19 @@ class AdminCog(commands.Cog, name="Admin"):
             return
         await interaction.followup.send(content="Recomputed from stored evidence:", embed=rank_embed(detail, staff_view=True))
 
+    @rr.command(name="lookup", description="Find UUIDs for players still missing one: Mojang first, then the last account that held the old name")
+    @app_commands.describe(retry_failed="Also retry names whose last lookup failed", everyone="Re-check every player, even those already resolved", force="Ignore cached answers")
+    @staff_only()
+    async def lookup(self, interaction: discord.Interaction, retry_failed: bool = False, everyone: bool = False, force: bool = False) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            job = await api_of(interaction).start_lookup(everyone=everyone, retry_failed=retry_failed, force=force)
+        except ApiError as exc:
+            await interaction.followup.send(f"Could not start the lookup: {exc.message}")
+            return
+        job_id = job.get("job_id")
+        await interaction.followup.send(f"Queued UUID lookup as job #{job_id}. Each old name is checked against Mojang first; names nobody holds today are matched to the most recent account that used them. Follow it with `/rr job {job_id}`.")
+
     @rr.command(name="find", description="Search players by name, alias or UUID fragment")
     @app_commands.describe(text="Text to search for")
     @staff_only()

@@ -400,6 +400,7 @@ def _json_path(data: Any, path: str) -> Any:
     return current
 
 
+CRAFTY_USERNAMES_URL = "https://api.crafty.gg/api/v2/usernames/{name}"
 LABYNET_PREVIOUS_ACCOUNTS_URL = "https://laby.net/api/search/get-previous-accounts/{name}"
 # laby.net answers 428 Precondition Required unless the client identifies itself the way browsers and
 # public laby.net bots do: a Mozilla-compatible token plus a contact URL.
@@ -433,6 +434,85 @@ class MojangProfileProvider(HttpJsonProvider):
         if queried != uuid:
             return LookupOutcome.FAILED, F.INVALID_RESPONSE, f"profile id {uuid} does not match queried uuid {queried}"
         return LookupOutcome.RESOLVED, None, "current profile name from Mojang"
+
+
+def _candidates_result(provider: HttpJsonProvider, username: str, attempt: LookupAttempt, candidates: dict[str, dict[str, Any]], label: str) -> LookupResult:
+    """Shared tail for historical providers: no holder, one holder, or several (left to the service to settle)."""
+    attempt.response_valid = True
+    if not candidates:
+        attempt.outcome = LookupOutcome.NOT_FOUND
+        attempt.failure_code = F.NOT_FOUND
+        attempt.error_message = f"{label} has no record of an account that used this name"
+        return provider._result(username, attempt, LookupOutcome.NOT_FOUND, None, None, F.NOT_FOUND, attempt.error_message)
+    if len(candidates) == 1:
+        cand = next(iter(candidates.values()))
+        attempt.outcome = LookupOutcome.RESOLVED
+        attempt.resolved_uuid = cand["uuid"]
+        attempt.resolved_name = cand["current_name"]
+        attempt.error_message = ""
+        if cand.get("current_holder"):
+            message = f"{label}: {cand['current_name']!r} holds {username!r} now"
+        else:
+            message = f"{label}: the account now named {cand['current_name']!r} previously used {username!r}" + (f" (record dated {cand['changed_at']})" if cand.get("changed_at") else "")
+        result = provider._result(username, attempt, LookupOutcome.RESOLVED, cand["uuid"], cand["current_name"], None, message)
+        result.candidates = [cand]
+        return result
+    attempt.failure_code = F.AMBIGUOUS_IDENTITY
+    summary = "; ".join(f"{c['uuid']} (now {c['current_name'] or '?'})" for c in candidates.values())
+    attempt.error_message = f"{len(candidates)} accounts previously used {username!r}: {summary}"[:500]
+    result = provider._result(username, attempt, LookupOutcome.FAILED, None, None, F.AMBIGUOUS_IDENTITY, attempt.error_message)
+    result.candidates = list(candidates.values())
+    return result
+
+
+class CraftyHistoricalProvider(HttpJsonProvider):
+    """Previous holders of a username through crafty.gg's public API.
+
+    crafty.gg records the same public Mojang data NameMC displays: who holds
+    a name now and every account that used it before, with the date each
+    took it. The ``usernames`` route needs no key and answers 404 for names
+    it has never seen. Each account returned is a candidate; the lookup
+    service decides whether to take the most recent holder or ask a person.
+    """
+
+    name = "crafty"
+    supports_historical = True
+    not_found_statuses = frozenset({404})
+
+    def __init__(self, settings: dict[str, Any] | None = None, client_factory: ClientFactory | None = None, clock: Callable[[], float] = time.monotonic) -> None:
+        settings = dict(settings or {})
+        super().__init__(str(settings.get("lookup.crafty_usernames_url") or CRAFTY_USERNAMES_URL), settings=settings, client_factory=client_factory, clock=clock)
+
+    def _interpret(self, username: str, attempt: LookupAttempt, data: Any) -> LookupResult:
+        body = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(body, dict):
+            attempt.failure_code = F.INVALID_RESPONSE
+            attempt.error_message = "crafty.gg response has no 'data' object"
+            return self._result(username, attempt, LookupOutcome.FAILED, None, None, F.INVALID_RESPONSE, attempt.error_message)
+        candidates: dict[str, dict[str, Any]] = {}
+        current = body.get("current_player")
+        if isinstance(current, dict):
+            uuid = normalise_uuid(str(current.get("uuid") or ""))
+            if uuid is not None:
+                candidates[uuid] = {"uuid": uuid, "current_name": str(current.get("username") or username), "matched_name": username, "changed_at": None, "source": self.name, "current_holder": True}
+        history = body.get("historical_players")
+        if history is None and current is None and not body.get("known", True):
+            history = []
+        if not isinstance(history, list):
+            attempt.failure_code = F.INVALID_RESPONSE
+            attempt.error_message = "crafty.gg response has no 'historical_players' list"
+            return self._result(username, attempt, LookupOutcome.FAILED, None, None, F.INVALID_RESPONSE, attempt.error_message)
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            uuid = normalise_uuid(str(entry.get("uuid") or ""))
+            if uuid is None:
+                continue
+            cand = candidates.setdefault(uuid, {"uuid": uuid, "current_name": str(entry.get("username") or ""), "matched_name": username, "changed_at": None, "source": self.name})
+            changed = entry.get("changed_at")
+            if changed and (cand.get("changed_at") is None or str(changed) > str(cand["changed_at"])):
+                cand["changed_at"] = str(changed)  # the date this account took the name
+        return _candidates_result(self, username, attempt, candidates, "crafty.gg")
 
 
 class LabyNetHistoricalProvider(HttpJsonProvider):
@@ -503,28 +583,7 @@ class LabyNetHistoricalProvider(HttpJsonProvider):
             if not held:
                 continue
             candidates[uuid] = {"uuid": uuid, "current_name": current, "matched_name": username, "changed_at": changed_at, "source": self.name}
-        attempt.response_valid = True
-        if not candidates:
-            attempt.outcome = LookupOutcome.NOT_FOUND
-            attempt.failure_code = F.NOT_FOUND
-            attempt.error_message = "laby.net has no record of an account that used this name"
-            return self._result(username, attempt, LookupOutcome.NOT_FOUND, None, None, F.NOT_FOUND, attempt.error_message)
-        if len(candidates) == 1:
-            cand = next(iter(candidates.values()))
-            attempt.outcome = LookupOutcome.RESOLVED
-            attempt.resolved_uuid = cand["uuid"]
-            attempt.resolved_name = cand["current_name"]
-            attempt.error_message = ""
-            message = f"laby.net: the account now named {cand['current_name']!r} previously used {username!r}" + (f" (record dated {cand['changed_at']})" if cand["changed_at"] else "")
-            result = self._result(username, attempt, LookupOutcome.RESOLVED, cand["uuid"], cand["current_name"], None, message)
-            result.candidates = [cand]
-            return result
-        attempt.failure_code = F.AMBIGUOUS_IDENTITY
-        summary = "; ".join(f"{c['uuid']} (now {c['current_name'] or '?'})" for c in candidates.values())
-        attempt.error_message = f"{len(candidates)} accounts previously used {username!r}: {summary}"[:500]
-        result = self._result(username, attempt, LookupOutcome.FAILED, None, None, F.AMBIGUOUS_IDENTITY, attempt.error_message)
-        result.candidates = list(candidates.values())
-        return result
+        return _candidates_result(self, username, attempt, candidates, "laby.net")
 
 
 class ConfigurableJsonProvider(HttpJsonProvider):

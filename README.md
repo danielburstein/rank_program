@@ -105,15 +105,21 @@ with `csv-retire <id>` and import the file again.
 
 ## Old usernames that have since changed
 
-Mojang's lookup only knows who holds a name *today*, and no open service
-still publishes name history (NameMC has no API; laby.net answers automated
-clients with a "challenge token required" gate). The dependable source is the
-old server itself: `usercache.json`, the `playerdata` folder, a LuckPerms or
-Essentials export, or purchase records all pair the historical name with the
-account UUID. Import them with the panel console (`identity-import
-usercache.json`) or the desktop client, then run `names` to fetch every
-account's current Mojang name. Conflicting records are flagged for review
-rather than overwritten.
+The UUID lookup (`lookup` in the panel console, `/rr lookup` in Discord, or
+the Identity page of the desktop client) works through every player without a
+UUID in two steps. Mojang is asked who holds the name today; a hit is taken as
+the player and recorded, done. When nobody holds the name any more, crafty.gg's
+public API is asked which accounts used it before, and the most recent holder
+is taken; the record and an `IDENTITY_NAME_REUSED` flag list the other
+accounts when there were several. Name reuse means this can hand a rank to the
+wrong person occasionally; that trade-off is deliberate and reviewable, and
+`lookup.history_pick = ambiguous` turns it back into a manual decision.
+NameMC itself has no API and is behind an anti-bot wall, so it is not
+scraped; crafty.gg records the same public Mojang data. The old server's own
+files remain the most complete source: `usercache.json`, a LuckPerms or
+Essentials export, or purchase records pair each historical name with its
+UUID, and `identity-import` loads them. Conflicting records are flagged for
+review rather than overwritten.
 
 ## Players who changed their name
 

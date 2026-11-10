@@ -22,6 +22,7 @@ that can reach it.
 | `/rr status` | staff | API health, whether the vision model is configured, dashboard counts. |
 | `/rr job <id>` | staff | Progress and errors of a processing job. |
 | `/rr recompute <username>` | staff | Recomputes one player's summary from stored evidence and shows it. |
+| `/rr lookup [retry_failed] [everyone] [force]` | staff | Queues the UUID lookup for every player still missing one: Mojang first, then the most recent account that held the name according to crafty.gg. Reports the job number for `/rr job`. |
 | `/rr find <text>` | staff | Searches players by name, alias or UUID fragment. |
 
 "Staff" means a member holding one of the configured staff/admin role ids,

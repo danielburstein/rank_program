@@ -20,6 +20,8 @@ def laby_user(uuid: str, current: str, history: list[tuple[str, str | None]]) ->
 def make_service(mojang_handler, laby_handler, *, historical="labynet"):
     settings = dict(DEFAULT_SETTINGS)
     settings["lookup.historical_provider"] = historical
+    settings["lookup.history_mode"] = "always"  # these tests exercise the cross-check between current owner and history
+    settings["lookup.history_pick"] = "ambiguous"
     settings["lookup.max_retries"] = 0
 
     def route(request: httpx.Request) -> httpx.Response:

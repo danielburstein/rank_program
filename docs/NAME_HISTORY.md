@@ -15,7 +15,8 @@ later took an old name) are acceptable.
 | Source | Old names for a UUID? | Account(s) that once held an old name? | Key needed | Rate limit seen | Status |
 | --- | --- | --- | --- | --- | --- |
 | Mojang `api.mojang.com/user/profiles/{uuid}/names` | removed 13 Sep 2022 | no | – | – | HTTP 404 today |
-| **crafty.gg** `GET https://api.crafty.gg/api/v2/players/{uuid or name}` | **yes** (`usernames[]`, `changed_at`, `name_changes`) | no (`?search=` only matches current names) | none | `x-ratelimit-limit: 150` | works |
+| **crafty.gg** `GET https://api.crafty.gg/api/v2/players/{uuid or name}` | **yes** (`usernames[]`, `changed_at`, `name_changes`) | – | none | `x-ratelimit-limit: 150` | works |
+| **crafty.gg** `GET https://api.crafty.gg/api/v2/usernames/{name}` (not in the Redocly page, served by the same API) | – | **yes**: `current_player` plus `historical_players[]` with `uuid`, current `username` and `changed_at` (the date that account took the name); 404 "Username not found" for names it never saw | none | same 150 budget | works, free names included |
 | **laby.net** `GET https://laby.net/api/v3/user/{uuid}/names` | **yes** (`name`, `changed_at`, `accurate`, `last_seen_at`) | no: every search endpoint answers HTTP 428 "Challenge token required" | none for `/names` | `x-ratelimit-limit: 10`, `retry-after` ≈ 3.5 min | works, tight limit |
 | laby.net `get-previous-accounts`, `search/names`, `get-snippet`, `v3/.../profile` | – | would be, but gated | anti-bot token laby.net does not hand out | – | blocked (428) |
 | NameMC | web page only, behind a Cloudflare challenge | web page only | no API | – | not usable by a program |
@@ -40,13 +41,33 @@ User-Agent.
 
 * **UUID → old names works, with no API key**, from two independent sources.
   That is exactly the direction a join-time check needs.
-* **Old name → account does not work** anywhere public. laby.net has the
-  endpoint but gates it; crafty.gg search only matches current names; NameMC
-  has no API. So we cannot pre-compute "who is OldName today" for every row in
-  the database. We can only answer it when that account shows up (joins the
-  server, runs `/claim`, or appears in a trusted CSV with a UUID).
+* **Old name → account works through crafty.gg's `usernames` route.** For a
+  name nobody holds today it lists every account that used it, with the date
+  each took it, so the most recent holder can be picked. laby.net has the same
+  data but gates it; NameMC has no API and sits behind a Cloudflare challenge,
+  so it is not scraped. Coverage follows what crafty.gg observed, mostly
+  accounts seen before September 2022 plus what it recorded since.
 * For the common case the player never renamed, so the current name already
   matches an alias. Name history only matters for the minority who renamed.
+
+## What is implemented (10 November 2026)
+
+The UUID lookup job (`lookup` in the console, `/rr lookup`, the client's
+Identity page, `POST /identity/lookup`) now does, for each player without a
+UUID:
+
+1. Mojang current-name lookup. A hit is recorded as the player's UUID and the
+   lookup stops there (`lookup.history_mode = fallback`).
+2. Otherwise crafty.gg `usernames/{name}` (`lookup.historical_provider =
+   crafty`). One previous holder resolves. Several resolve to the most recent
+   holder (`lookup.history_pick = most_recent`); the others are kept in the
+   resolution note and an `IDENTITY_NAME_REUSED` info flag so staff can see
+   and undo a collision. `history_pick = ambiguous` restores the manual
+   decision; `history_mode = always` cross-checks even names Mojang resolves.
+3. Nothing anywhere: `UUID_LOOKUP_HISTORICAL_NAME_UNRESOLVED` as before.
+
+Rate: one crafty.gg call per unresolved name, capped at
+`lookup.crafty_requests_per_minute` (60) and cached for `lookup.cache_ttl_hours`.
 
 ## Old-server files beat any website
 

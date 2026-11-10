@@ -219,6 +219,10 @@ class IdentityService:
                         old.is_active = False
                     status = IdentityStatus.VERIFIED.value
                     note = "historical-name provider match" if result.is_historical else "current-name match; the name may have belonged to someone else historically"
+                    if len(result.candidates) > 1:
+                        note = f"{note}; {result.message}"[:2000]
+                        others = "; ".join(f"{c.get('uuid')} (now {c.get('current_name') or '?'})" for c in result.candidates if c.get("uuid") != uuid)
+                        flags.append(FlagInstance("IDENTITY_NAME_REUSED", f"{name}: {len(result.candidates)} accounts have used this name; the most recent holder {result.current_name!r} ({uuid}) was taken. Others: {others}"[:1000]))
                     player.canonical_uuid = uuid
                     player.current_name = result.current_name
                     player.identity_status = status

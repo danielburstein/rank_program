@@ -155,6 +155,9 @@ class RankApiClient:
     async def recompute_player(self, player_id: int) -> dict[str, Any]:
         return await self._request("POST", f"/players/{player_id}/recompute")
 
+    async def start_lookup(self, *, everyone: bool = False, retry_failed: bool = False, force: bool = False) -> dict[str, Any]:
+        return await self._request("POST", "/identity/lookup", json={"all": everyone, "retry_failed": retry_failed, "force": force})
+
 
 def _detail(response: httpx.Response) -> str:
     try:

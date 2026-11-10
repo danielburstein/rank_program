@@ -163,7 +163,11 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "lookup.bedrock_provider": "geyser",
     "lookup.geyser_url": "https://api.geysermc.org/v2/utils/uuid/bedrock_or_java/{name}?prefix={prefix}",
     "lookup.bedrock_prefix": ".",
-    "lookup.historical_provider": "none",  # none | labynet | custom
+    "lookup.historical_provider": "crafty",  # crafty | labynet | custom | none
+    "lookup.history_mode": "fallback",  # fallback: history only when nobody holds the name now | always: cross-check every name
+    "lookup.history_pick": "most_recent",  # most_recent: take the latest holder when several accounts used the name | ambiguous: ask a person
+    "lookup.crafty_usernames_url": "https://api.crafty.gg/api/v2/usernames/{name}",
+    "lookup.crafty_requests_per_minute": 60,
     "lookup.labynet_previous_accounts_url": "https://laby.net/api/search/get-previous-accounts/{name}",
     "lookup.labynet_requests_per_minute": 30,
     "lookup.labynet_user_agent": "Mozilla/5.0 (compatible; RankRecovery/0.1; +https://github.com/danielburstein/rank_program)",

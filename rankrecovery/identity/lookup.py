@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable, Iterable, MutableMapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Any
 
 from rankrecovery.core.enums import LookupOutcome
@@ -22,6 +23,7 @@ from rankrecovery.identity.failures import is_proxy_failure, is_retryable
 from rankrecovery.identity.providers import (
     ClientFactory,
     ConfigurableJsonProvider,
+    CraftyHistoricalProvider,
     GeyserBedrockProvider,
     LabyNetHistoricalProvider,
     ManualProvider,
@@ -79,6 +81,18 @@ class LookupService:
     def bedrock_prefix(self) -> str:
         return str(self.settings.get("lookup.bedrock_prefix", "."))
 
+    @property
+    def history_mode(self) -> str:
+        """``fallback``: ask the historical provider only when no account holds the name now. ``always``: cross-check every name."""
+        mode = str(self.settings.get("lookup.history_mode", "fallback"))
+        return mode if mode in ("fallback", "always") else "fallback"
+
+    @property
+    def history_pick(self) -> str:
+        """``most_recent``: when several accounts used the name, take the latest holder. ``ambiguous``: leave it to a person."""
+        pick = str(self.settings.get("lookup.history_pick", "most_recent"))
+        return pick if pick in ("most_recent", "ambiguous") else "most_recent"
+
     def _provider(self, key: str) -> Any | None:
         return self.providers.get(key)
 
@@ -120,7 +134,7 @@ class LookupService:
 
     def _cache_set(self, provider_name: str, username: str, result: LookupResult) -> None:
         if result.outcome not in (LookupOutcome.RESOLVED, LookupOutcome.NOT_FOUND):
-            return
+            return  # failures are never cached; a several-holders answer is re-fetched so its candidate list stays complete
         key = (provider_name, username.lower())
         with self._cache_lock:
             self.cache[key] = (self._clock() + self.cache_ttl_seconds, replace(result, cached=False))
@@ -158,16 +172,20 @@ class LookupService:
             return current
         if current.outcome in (LookupOutcome.FAILED, LookupOutcome.SKIPPED):
             return current  # technical failure: retry later rather than guess from history alone
+        if current.outcome == LookupOutcome.RESOLVED and self.history_mode == "fallback":
+            return current  # somebody holds the name today: that account is taken as the player, done
         hist = self._resolve_with(historical, username, force=force, cancel=cancel)
-        return self._combine(username, current, hist)
+        return self._combine(username, current, hist, pick=self.history_pick)
 
     @staticmethod
-    def _combine(username: str, current: LookupResult, hist: LookupResult) -> LookupResult:
+    def _combine(username: str, current: LookupResult, hist: LookupResult, *, pick: str = "ambiguous") -> LookupResult:
         """Merge the current-name owner with the accounts that previously held the name.
 
         Names can be reused, so a current owner and a previous holder may be
-        different people. Agreement resolves; disagreement or several previous
-        holders become an ambiguity that a person must settle.
+        different people. Agreement resolves. Several holders are settled by
+        ``pick``: ``most_recent`` takes the account that held the name last
+        (the current holder if there is one, else the latest dated record),
+        ``ambiguous`` leaves the choice to a person.
         """
         attempts = list(current.attempts) + list(hist.attempts)
         current_uuid = current.uuid if current.outcome == LookupOutcome.RESOLVED else None
@@ -195,8 +213,15 @@ class LookupService:
             return LookupResult(queried_name=username, provider=hist.provider if historical_match else current.provider, outcome=LookupOutcome.RESOLVED, uuid=cand["uuid"], current_name=cand.get("current_name") or current.current_name, message=message, attempts=attempts, is_historical=historical_match, candidates=[cand])
 
         if len(candidates) > 1:
-            summary = "; ".join(f"{c['uuid']} (now {c.get('current_name') or '?'}{', current holder' if c.get('current_holder') else ''})" for c in candidates.values())
-            return LookupResult(queried_name=username, provider=hist.provider, outcome=LookupOutcome.FAILED, failure_code=F.AMBIGUOUS_IDENTITY, message=f"{len(candidates)} accounts have used {username!r}; choose one manually: {summary}", attempts=attempts, candidates=list(candidates.values()))
+            ordered = sorted(candidates.values(), key=_recency_key, reverse=True)
+            summary = "; ".join(f"{c['uuid']} (now {c.get('current_name') or '?'}{', current holder' if c.get('current_holder') else ''}{', took the name ' + str(c['changed_at'])[:10] if c.get('changed_at') else ''})" for c in ordered)
+            chosen = _most_recent(ordered) if pick == "most_recent" else None
+            if chosen is not None:
+                others = "; ".join(f"{c['uuid']} (now {c.get('current_name') or '?'})" for c in ordered if c is not chosen)
+                message = f"{len(candidates)} accounts have used {username!r}; took the most recent holder {chosen.get('current_name') or '?'!r} ({chosen['uuid']}). Others: {others}"
+                is_current = bool(chosen.get("current_holder"))
+                return LookupResult(queried_name=username, provider=current.provider if is_current else hist.provider, outcome=LookupOutcome.RESOLVED, uuid=chosen["uuid"], current_name=chosen.get("current_name") or (current.current_name if is_current else None), message=message, attempts=attempts, is_historical=not is_current, candidates=ordered)
+            return LookupResult(queried_name=username, provider=hist.provider, outcome=LookupOutcome.FAILED, failure_code=F.AMBIGUOUS_IDENTITY, message=f"{len(candidates)} accounts have used {username!r}; choose one manually: {summary}", attempts=attempts, candidates=ordered)
 
         return LookupResult(queried_name=username, provider=current.provider, outcome=LookupOutcome.NOT_FOUND, failure_code=F.HISTORICAL_NAME_UNRESOLVED, message=f"no current account named {username!r} and {hist.provider} has no record of a previous holder", attempts=attempts)
 
@@ -348,9 +373,33 @@ class LookupService:
                 close()
 
 
+def _recency_key(cand: dict) -> tuple[int, float]:
+    """Current holder first, then the latest 'took the name' date; undated records last."""
+    if cand.get("current_holder"):
+        return (2, 0.0)
+    raw = cand.get("changed_at")
+    if not raw:
+        return (0, 0.0)
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return (1, parsed.timestamp())
+    except ValueError:
+        return (0, 0.0)
+
+
+def _most_recent(ordered: list[dict]) -> dict | None:
+    """The account that held the name last, or None when no record is dated."""
+    if not ordered:
+        return None
+    best = ordered[0]
+    return best if _recency_key(best)[0] > 0 else None
+
+
 # -------------------------------------------------------------------- builders
 def _per_provider_rates(settings: dict[str, Any]) -> dict[str, float]:
-    return {"labynet": float(settings.get("lookup.labynet_requests_per_minute", 30))}
+    return {"labynet": float(settings.get("lookup.labynet_requests_per_minute", 30)), "crafty": float(settings.get("lookup.crafty_requests_per_minute", 60))}
 
 
 def build_default_providers(settings: dict[str, Any], client_factory: ClientFactory | None = None) -> dict[str, Any]:
@@ -361,6 +410,7 @@ def build_default_providers(settings: dict[str, Any], client_factory: ClientFact
         "manual": ManualProvider(),
         "none": NoHistoricalProvider(),
         "labynet": LabyNetHistoricalProvider(settings, client_factory=client_factory),
+        "crafty": CraftyHistoricalProvider(settings, client_factory=client_factory),
     }
     historical = str(settings.get("lookup.historical_provider", "none"))
     if historical == "custom":
