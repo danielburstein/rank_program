@@ -141,7 +141,10 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "extraction.vision_max_crop_edge": 1568,
     "extraction.vision_timeout_seconds": 120,
     "extraction.vision_max_retries": 3,
-    "extraction.vision_concurrency": 3,
+    "extraction.vision_concurrency": 4,  # images read at the same time by one extraction job
+    "extraction.vision_region_concurrency": 3,  # crops (tab columns, chat, nametags) of one image read at the same time
+    "extraction.vision_max_concurrent_calls": 8,  # cap on model calls in flight across the whole job
+    "extraction.rate_limit_retries": 4,  # an image refused with 429 after the SDK's own retries waits 15s, 30s, 60s... and is tried again this many times
     "extraction.vision_model_layout": True,
     "extraction.vision_server_fallback": True,
     "extraction.vision_prompt_version": "1",

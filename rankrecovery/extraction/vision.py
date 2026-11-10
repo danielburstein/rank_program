@@ -11,7 +11,9 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -133,6 +135,9 @@ Return bbox as [x0, y0, x1, y1] on a 0-1000 scale of this crop's width and heigh
 In all_text, transcribe every piece of readable text in the crop in reading order (used for search indexing)."""
 
 
+RATE_LIMIT_MARKER = "rate limited by the Anthropic API"
+
+
 @dataclass(slots=True)
 class _Call:
     kind: str
@@ -152,9 +157,18 @@ class AnthropicVisionExtractor:
         api_key: str | None,
         client: Any | None = None,
         region_detector: Any | None = None,
+        *,
+        concurrency: int = 3,
+        max_concurrent_calls: int | None = None,
     ) -> None:
+        """``concurrency`` crops of one image are read at the same time; ``max_concurrent_calls`` caps the model
+        calls in flight across every thread sharing this extractor. Neither is part of the settings fingerprint,
+        so changing them never makes already-read images look stale."""
         self.settings = settings
         self.region_detector = region_detector or detect_regions
+        self._concurrency = max(1, int(concurrency))
+        self._gate = threading.BoundedSemaphore(max(1, int(max_concurrent_calls))) if max_concurrent_calls else None
+        self._lock = threading.Lock()
         if client is None:
             if not api_key:
                 raise ExtractorUnavailable("no Anthropic API key configured")
@@ -200,14 +214,12 @@ class AnthropicVisionExtractor:
             if regions is None:
                 regions = self._regions(img, output, raw_parts)
             output.regions = regions
-            for region in regions:
-                crops = region.columns or [region.bbox]
-                for crop_bbox in crops:
-                    for tile in self._tiles(crop_bbox):
-                        rows, text = self._read_crop(img, tile, region.kind, output, raw_parts)
-                        output.rows.extend(rows)
-                        if text:
-                            texts.append(text)
+            crops: list[tuple[BBox, RegionKind]] = [(tile, region.kind) for region in regions for crop_bbox in (region.columns or [region.bbox]) for tile in self._tiles(crop_bbox)]
+            for rows, text, parts in self._read_crops(img, crops, output):
+                output.rows.extend(rows)
+                raw_parts.extend(parts)
+                if text:
+                    texts.append(text)
         except _ApiFailure as exc:
             output.error = str(exc)
         except ExtractorUnavailable:
@@ -225,6 +237,30 @@ class AnthropicVisionExtractor:
         ]
         output.cost["elapsed_seconds"] = round(time.monotonic() - started, 2)
         return output
+
+    def _read_crops(self, img: Image.Image, crops: list[tuple[BBox, RegionKind]], output: ExtractionOutput) -> list[tuple[list[RawRow], str, list[str]]]:
+        """Read every crop, several at a time when allowed; results come back in crop order whatever finished first."""
+
+        def one(crop: tuple[BBox, RegionKind]) -> tuple[list[RawRow], str, list[str]]:
+            parts: list[str] = []
+            rows, text = self._read_crop(img, crop[0], crop[1], output, parts)
+            return rows, text, parts
+
+        if self._concurrency <= 1 or len(crops) <= 1:
+            return [one(crop) for crop in crops]
+        with ThreadPoolExecutor(max_workers=min(self._concurrency, len(crops)), thread_name_prefix="vision-crop") as pool:
+            futures = [pool.submit(one, crop) for crop in crops]
+            results: list[tuple[list[RawRow], str, list[str]]] = []
+            first_error: BaseException | None = None
+            for future in futures:
+                try:
+                    results.append(future.result())
+                except BaseException as exc:  # noqa: BLE001 - re-raised below once every crop has settled
+                    if first_error is None:
+                        first_error = exc
+            if first_error is not None:
+                raise first_error
+            return results
 
     # ---------------------------------------------------------------- regions
     def _regions(self, img: Image.Image, output: ExtractionOutput, raw_parts: list[str]) -> list[DetectedRegion]:
@@ -360,26 +396,33 @@ class AnthropicVisionExtractor:
             anthropic = None  # type: ignore[assignment]
         try:
             beta_api = getattr(self.client, "beta", None) if self._server_fallback else None
-            if beta_api is not None and hasattr(beta_api, "messages"):
-                response = beta_api.messages.create(betas=["server-side-fallback-2026-07-01"], fallbacks="default", **request)
-            else:
-                response = self.client.messages.create(**request)
+            if self._gate is not None:
+                self._gate.acquire()
+            try:
+                if beta_api is not None and hasattr(beta_api, "messages"):
+                    response = beta_api.messages.create(betas=["server-side-fallback-2026-07-01"], fallbacks="default", **request)
+                else:
+                    response = self.client.messages.create(**request)
+            finally:
+                if self._gate is not None:
+                    self._gate.release()
         except Exception as exc:
             if anthropic is not None:
                 if isinstance(exc, anthropic.AuthenticationError):
                     raise ExtractorUnavailable("Anthropic API key was rejected") from exc
                 if isinstance(exc, anthropic.RateLimitError):
-                    raise _ApiFailure("rate limited by the Anthropic API after retries") from exc
+                    raise _ApiFailure(f"{RATE_LIMIT_MARKER} after retries") from exc
                 if isinstance(exc, anthropic.APIStatusError):
                     raise _ApiFailure(f"Anthropic API error {exc.status_code}: {getattr(exc, 'message', exc)}") from exc
                 if isinstance(exc, anthropic.APIConnectionError):
                     raise _ApiFailure(f"Anthropic API connection error: {exc}") from exc
             raise _ApiFailure(f"{type(exc).__name__}: {exc}") from exc
-        output.cost["api_calls"] = output.cost.get("api_calls", 0) + 1
         usage = getattr(response, "usage", None)
-        if usage is not None:
-            output.cost["input_tokens"] = output.cost.get("input_tokens", 0) + int(getattr(usage, "input_tokens", 0) or 0)
-            output.cost["output_tokens"] = output.cost.get("output_tokens", 0) + int(getattr(usage, "output_tokens", 0) or 0)
+        with self._lock:  # crops of one image may be read on several threads
+            output.cost["api_calls"] = output.cost.get("api_calls", 0) + 1
+            if usage is not None:
+                output.cost["input_tokens"] = output.cost.get("input_tokens", 0) + int(getattr(usage, "input_tokens", 0) or 0)
+                output.cost["output_tokens"] = output.cost.get("output_tokens", 0) + int(getattr(usage, "output_tokens", 0) or 0)
         stop = getattr(response, "stop_reason", None)
         text = ""
         for block in getattr(response, "content", []) or []:

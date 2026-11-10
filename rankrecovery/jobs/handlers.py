@@ -2,17 +2,34 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 import traceback
 from typing import Any
 
 from rankrecovery.jobs.runner import JobHandle, JobRunner
 from rankrecovery.services.context import AppContext
 
+log = logging.getLogger(__name__)
+
+
+SLEEP = time.sleep  # patched by tests
+
 
 def extract_images(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:
-    """Extract every pending image (or the given ids) and recompute touched players."""
+    """Extract every pending image (or the given ids), several at a time, then recompute touched players.
+
+    Vision images run ``extraction.vision_concurrency`` at a time (OCR: ``extraction.ocr_workers``);
+    inside each image the crops are read in parallel too, all capped by one shared limit on model
+    calls in flight. An image the API rate-limits is paused and retried with a growing delay.
+    """
+    from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor
+    from concurrent.futures import wait as wait_futures
+
     from rankrecovery.extraction.base import ExtractorUnavailable
+    from rankrecovery.extraction.vision import RATE_LIMIT_MARKER
+    from rankrecovery.jobs.runner import JobCancelled
     from rankrecovery.services.extraction import ExtractionService
     from rankrecovery.services.reconcile import ReconcileService
 
@@ -30,21 +47,60 @@ def extract_images(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> d
     todo = [i for i in ids if i not in done_ids]
     touched: set[int] = set()
     failed = 0
-    job.progress(len(done_ids), len(ids), f"extracting with {extractor.settings.engine}")
-    for n, image_id in enumerate(todo, start=1):
-        job.check_cancelled()
-        try:
+    engine = extractor.settings.engine
+    key = "extraction.vision_concurrency" if engine == "anthropic" else "extraction.ocr_workers"
+    workers = max(1, min(16, int(params.get("workers") or ctx.settings.get(key, 4 if engine == "anthropic" else 2))))
+    rate_limit_retries = max(0, int(ctx.settings.get("extraction.rate_limit_retries", 4)))
+
+    def work(image_id: int):
+        pause = 15.0
+        for attempt in range(rate_limit_retries + 1):
             result = svc.extract_image(image_id, extractor=extractor, force=force, job_id=job.job_id)
-            if result.error:
-                failed += 1
-                job.error(f"image:{image_id}", result.error)
-            touched.update(result.players_touched)
-        except Exception as exc:
-            failed += 1
-            job.error(f"image:{image_id}", str(exc), traceback.format_exc())
-        done_ids.add(image_id)
-        if n % 5 == 0 or n == len(todo):
-            job.progress(len(done_ids), len(ids), f"{len(done_ids)}/{len(ids)} images", failed=failed, checkpoint={"done": sorted(done_ids)})
+            if result.error and RATE_LIMIT_MARKER in result.error and attempt < rate_limit_retries and not job.cancelled:
+                log.warning("image %s rate limited; pausing %.0fs before try %d/%d", image_id, pause, attempt + 2, rate_limit_retries + 1)
+                SLEEP(pause)
+                pause = min(pause * 2, 300.0)
+                continue
+            return result
+        return result  # pragma: no cover - loop always returns
+
+    job.progress(len(done_ids), len(ids), f"extracting with {engine}, {workers} image(s) at a time")
+    completed = 0
+    pending: dict[Future, int] = {}
+    next_index = 0
+    window = workers * 2
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="extract") as pool:
+        try:
+            while next_index < len(todo) or pending:
+                while next_index < len(todo) and len(pending) < window:
+                    job.check_cancelled()
+                    image_id = todo[next_index]
+                    pending[pool.submit(work, image_id)] = image_id
+                    next_index += 1
+                if not pending:
+                    break
+                finished, _ = wait_futures(list(pending), return_when=FIRST_COMPLETED)
+                for future in finished:
+                    image_id = pending.pop(future)
+                    try:
+                        result = future.result()
+                        if result.error:
+                            failed += 1
+                            job.error(f"image:{image_id}", result.error)
+                        touched.update(result.players_touched)
+                    except ExtractorUnavailable as exc:
+                        raise RuntimeError(f"extractor became unavailable: {exc}") from exc
+                    except Exception as exc:
+                        failed += 1
+                        job.error(f"image:{image_id}", str(exc), traceback.format_exc())
+                    done_ids.add(image_id)
+                    completed += 1
+                    if completed % 5 == 0 or completed == len(todo):
+                        job.progress(len(done_ids), len(ids), f"{len(done_ids)}/{len(ids)} images ({workers} at a time)", failed=failed, checkpoint={"done": sorted(done_ids)})
+        except JobCancelled:
+            for future in pending:
+                future.cancel()
+            raise
     recon = ReconcileService(ctx)
     stale = sorted(set(recon.stale_player_ids()) | touched)
     for i, pid in enumerate(stale, start=1):
@@ -52,7 +108,7 @@ def extract_images(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> d
         recon.recompute_player(pid)
         if i % 20 == 0:
             job.progress(len(ids), len(ids), f"recomputing players {i}/{len(stale)}")
-    return {"images": len(ids), "failed": failed, "players_recomputed": len(stale)}
+    return {"images": len(ids), "failed": failed, "players_recomputed": len(stale), "workers": workers}
 
 
 def recompute_players(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:

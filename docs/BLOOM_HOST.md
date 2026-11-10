@@ -120,6 +120,7 @@ for the list; the most useful ones:
 | `settings get/set/list` | read or change any setting (policy keys queue a recompute) |
 | `key create <name> <role>` / `keys` / `key revoke <id>` | API keys without curl |
 | `identity-import usercache.json` | link old names to UUIDs from the old server's records (upload the file with the File Manager first); `--create` also adds names not seen in screenshots |
+| `settings set extraction.vision_concurrency 6` | images read at the same time by an extraction job (default 4); `extraction.vision_max_concurrent_calls` (default 8) caps model calls in flight. Raise both if your Anthropic rate limit allows, lower them if jobs report rate limiting |
 | `ingest [--submitter <name>]` | bulk submit: drag screenshots or whole folders into the `newuploads` folder in the File Manager, run this, and every readable image in it and its sub-folders is submitted and removed (emptied sub-folders too; unreadable files go to `newuploads/rejected`; folders named `rejected` are skipped) |
 | `drive <link> [--submitter <name>]` | download the photos behind a Google Drive folder/file link (shared with "Anyone with the link") into `newuploads` and submit them; folders over 50 files need `settings set drive.api_key "<google api key>"` |
 | `names` | fetch the current Mojang name of every player with a known UUID |

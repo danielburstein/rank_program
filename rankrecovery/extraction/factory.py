@@ -57,7 +57,13 @@ def build_extractor(settings: dict[str, Any], api_key: str | None, *, client: An
     if chosen == ExtractorType.VISION:
         from rankrecovery.extraction.vision import AnthropicVisionExtractor
 
-        return AnthropicVisionExtractor(ext_settings, api_key, client=client)
+        return AnthropicVisionExtractor(
+            ext_settings,
+            api_key,
+            client=client,
+            concurrency=int(settings.get("extraction.vision_region_concurrency", 3)),
+            max_concurrent_calls=int(settings.get("extraction.vision_max_concurrent_calls", 8)),
+        )
     if ext_settings.engine == "easyocr":
         from rankrecovery.extraction.ocr import EasyOcrExtractor
 
