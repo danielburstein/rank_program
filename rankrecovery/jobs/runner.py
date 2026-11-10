@@ -188,10 +188,15 @@ class JobRunner:
             if func is None:
                 raise RuntimeError(f"no handler registered for job kind {kind}")
             result = func(self.ctx, handle, params)
-            status = JobStatus.CANCELLED if cancel.is_set() else JobStatus.COMPLETED
-            self._finish(job_id, status, result=result)
+            if cancel.is_set() and self._stop.is_set():
+                self._interrupted(job_id)
+            else:
+                self._finish(job_id, JobStatus.CANCELLED if cancel.is_set() else JobStatus.COMPLETED, result=result)
         except JobCancelled:
-            self._finish(job_id, JobStatus.CANCELLED)
+            if self._stop.is_set():
+                self._interrupted(job_id)  # the process is shutting down, not the user cancelling: resume after the restart
+            else:
+                self._finish(job_id, JobStatus.CANCELLED)
         except Exception as exc:
             log.exception("job %s (%s) failed", job_id, kind)
             self._record_error(job_id, "job", str(exc), traceback.format_exc())
@@ -200,6 +205,19 @@ class JobRunner:
             self._cancel_events.pop(job_id, None)
             with self._lock:
                 self._pause_flags.pop(job_id, None)
+
+    def _interrupted(self, job_id: int) -> None:
+        """Put a job stopped by shutdown back in the queue; ``start()`` re-queues it from its checkpoint."""
+        with self.ctx.db.write_session() as s:
+            job = s.get(Job, job_id)
+            if job is None or job.cancel_requested:
+                if job is not None:
+                    job.status = JobStatus.CANCELLED.value
+                    job.finished_at = datetime.now(UTC)
+                return
+            job.status = JobStatus.QUEUED.value
+            job.progress_message = "interrupted by a restart; resumes from its checkpoint when the server is back"
+        log.info("job %s interrupted by shutdown; it resumes after the restart", job_id)
 
     # ------------------------------------------------------------- persistence
     def _update(self, job_id: int, *, done: int, total: int | None, message: str, failed: int | None, checkpoint: dict[str, Any] | None) -> None:
