@@ -36,6 +36,8 @@ from rankrecovery.client.widgets.forms import ConfirmDialog, NoteDialog, error_b
 from rankrecovery.config.defaults import DEFAULT_SETTINGS, SECRET_SETTINGS
 
 GROUP_TITLES = {
+    "ingest": "Bulk submissions (newuploads folder)",
+    "drive": "Google Drive",
     "ranks": "Rank lists, aliases, staff prefixes and conversion mapping",
     "verification": "High-rank verification by independent submitters",
     "csv": "Trusted purchase CSV",
@@ -52,6 +54,16 @@ GROUP_TITLES = {
     "config": "Schema",
 }
 LABELS = {
+    "ingest.folder": "Folder on the server that staff drop screenshots into (relative to the server's working directory)",
+    "ingest.submitter": "Submitter recorded for dropped files when the command names none",
+    "drive.api_key": "Google API key (optional; lists Drive folders of any size)",
+    "lookup.bulk_lookups": "Ask Mojang for ten names per request before single lookups",
+    "lookup.history_mode": "History check: fallback = only when nobody holds the name now, always = cross-check every name",
+    "lookup.history_pick": "Several accounts used a name: most_recent takes the latest holder, ambiguous asks a person",
+    "lookup.rate_limit_cooldown_seconds": "First pause after a 429 without Retry-After (doubles on each repeat)",
+    "lookup.rate_limit_max_cooldown_seconds": "Longest single rate-limit pause",
+    "lookup.rate_limit_max_retries": "429s tolerated for one request before it is reported failed",
+    "lookup.burst": "Requests that may go out back to back before pacing applies",
     "verification.require_two_submitters_above_immortal": "Require 2 independent submitters for ranks above IMMORTAL",
     "csv.treat_as_confirmed_exempt_from_verification": "Treat trusted purchase CSV records as confirmed and exempt from submitter verification",
     "dates.exclude_out_of_date_from_eligibility": "Exclude OUT_OF_DATE evidence from rank eligibility (unchecked = flag only)",
@@ -347,6 +359,12 @@ class SettingsPage(Page):
         return scroll
 
     def _widget_for(self, key: str, value: Any) -> QWidget | None:
+        if key == "drive.api_key":
+            editor = QLineEdit()
+            editor.setEchoMode(QLineEdit.EchoMode.Password)
+            configured = (self.data.get("secrets_configured") or {}).get(key)
+            editor.setPlaceholderText("configured (enter a new key to replace)" if configured else "optional: a Google API key with the Drive API enabled, for Drive folders over 50 files")
+            return editor
         if key in SECRET_SETTINGS:
             if key == "lookup.proxy_list":
                 editor = QPlainTextEdit()

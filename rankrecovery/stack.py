@@ -74,6 +74,13 @@ def main(argv: list[str] | None = None) -> int:
 
     ctx = build_context(os.environ.get("RANKRECOVERY_DATABASE_URL"))
     app = create_app(ctx)
+    try:
+        from rankrecovery.services.ingest import FolderIngestService
+
+        drop_folder = FolderIngestService(ctx).folder_path()
+        log.info("bulk submissions: drop screenshots into %s and run 'ingest' (console) or /rr ingest (Discord)", drop_folder)
+    except OSError as exc:  # pragma: no cover - read-only filesystem
+        log.warning("could not create the newuploads folder: %s", exc)
     config = uvicorn.Config(app, host=host, port=port, log_level=level.lower())
     server = uvicorn.Server(config)
     server.install_signal_handlers = lambda: None  # type: ignore[method-assign]

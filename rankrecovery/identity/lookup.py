@@ -7,6 +7,7 @@ responses, other 4xx responses and invalid payloads are never retried.
 
 from __future__ import annotations
 
+import logging
 import random
 import threading
 import time
@@ -35,6 +36,7 @@ from rankrecovery.identity.proxies import ProxyEntry, ProxyPool, parse_proxy_lis
 from rankrecovery.identity.ratelimit import RateLimitCancelled, RateLimiter
 
 CacheKey = tuple[str, str]
+log = logging.getLogger(__name__)
 
 
 class LookupService:
@@ -53,9 +55,10 @@ class LookupService:
         self.settings = dict(settings)
         self.providers = providers
         self.proxy_pool = proxy_pool or ProxyPool(mode="direct")
-        self.rate_limiter = rate_limiter or RateLimiter(float(self.settings.get("lookup.requests_per_minute", 100)), per_provider=_per_provider_rates(self.settings), clock=clock, sleep=sleep)
+        self.rate_limiter = rate_limiter or RateLimiter(float(self.settings.get("lookup.requests_per_minute", 60)), per_provider=_per_provider_rates(self.settings), burst=_burst(self.settings), max_wait_seconds=_max_wait(self.settings), clock=clock, sleep=sleep)
         self.cache = cache if cache is not None else {}
         self._cache_lock = threading.Lock()
+        self._prefetched: dict[CacheKey, LookupResult] = {}  # answers from a bulk request, handed to the next single lookup of that name
         self._clock = clock
         self._sleep = sleep
         self._rng = rng
@@ -80,6 +83,25 @@ class LookupService:
     @property
     def bedrock_prefix(self) -> str:
         return str(self.settings.get("lookup.bedrock_prefix", "."))
+
+    @property
+    def bulk_lookups(self) -> bool:
+        return bool(self.settings.get("lookup.bulk_lookups", True))
+
+    @property
+    def rate_limit_cooldown(self) -> float:
+        return max(0.0, float(self.settings.get("lookup.rate_limit_cooldown_seconds", 10)))
+
+    @property
+    def rate_limit_max_cooldown(self) -> float:
+        return max(self.rate_limit_cooldown, float(self.settings.get("lookup.rate_limit_max_cooldown_seconds", 300)))
+
+    @property
+    def rate_limit_max_retries(self) -> int:
+        return max(0, int(self.settings.get("lookup.rate_limit_max_retries", 10)))
+
+    def _looks_bedrock(self, username: str) -> bool:
+        return bool(self.bedrock_prefix) and username.startswith(self.bedrock_prefix)
 
     @property
     def history_mode(self) -> str:
@@ -143,7 +165,7 @@ class LookupService:
     def resolve(self, username: str, *, is_bedrock: bool | None = None, force: bool = False, cancel: threading.Event | None = None) -> LookupResult:
         username = username.strip()
         if is_bedrock is None:
-            is_bedrock = bool(self.bedrock_prefix) and username.startswith(self.bedrock_prefix)
+            is_bedrock = self._looks_bedrock(username)
         if is_bedrock:
             provider = self.bedrock_provider()
             if not getattr(provider, "supports_bedrock", False):
@@ -227,6 +249,10 @@ class LookupService:
 
     def _resolve_with(self, provider: Any, username: str, *, force: bool, cancel: threading.Event | None) -> LookupResult:
         name = getattr(provider, "name", "provider")
+        with self._cache_lock:
+            prefetched = self._prefetched.pop((name, username.lower()), None)
+        if prefetched is not None:
+            return prefetched  # answered by a bulk request moments ago
         if not force:
             cached = self._cache_get(name, username)
             if cached is not None:
@@ -237,9 +263,14 @@ class LookupService:
         rotate = self.proxy_pool.mode == "rotate"
         proxy: ProxyEntry | None = None
         total_attempts = self.max_retries + 1
-
         proxies_exhausted = False
-        for attempt_no in range(1, total_attempts + 1):
+        attempt_no = 0
+        failures = 0  # technical failures, bounded by lookup.max_retries
+        rate_hits = 0  # 429s have their own budget: pause, retry, pause longer each time
+        last_pause = 0.0
+
+        while True:
+            attempt_no += 1
             if cancel is not None and cancel.is_set():
                 return self._cancelled(username, name, attempts)
             try:
@@ -267,6 +298,15 @@ class LookupService:
                 result.attempts = attempts
                 return result
 
+            if code == F.RATE_LIMITED:
+                rate_hits += 1
+                last_pause = self._rate_limit_pause(rate_hits, retry_after)
+                self.rate_limiter.penalise(name, last_pause)  # every worker waits, not just this one
+                if rate_hits > self.rate_limit_max_retries:
+                    break
+                self._sleep(last_pause)
+                continue
+
             if is_proxy_failure(code):
                 self.proxy_pool.mark_failure(proxy)
                 if code == F.PROXY_AUTH_FAILED and not rotate:
@@ -275,10 +315,10 @@ class LookupService:
                     proxy = self.proxy_pool.rotate()
             if not is_retryable(code):
                 break
-            if attempt_no >= total_attempts:
+            failures += 1
+            if failures >= total_attempts:
                 break
-            delay = retry_after if (code == F.RATE_LIMITED and retry_after is not None) else self._backoff(attempt_no)
-            self._sleep(delay)
+            self._sleep(self._backoff(failures))
 
         if last is None:
             return LookupResult(
@@ -289,19 +329,35 @@ class LookupService:
                 message="no proxy available: every configured proxy is disabled after repeated failures",
                 attempts=attempts,
             )
-        exhausted = self.max_retries > 0 and is_retryable(last.failure_code) and (len(attempts) >= total_attempts or proxies_exhausted)
+        rate_budget_spent = rate_hits > self.rate_limit_max_retries
+        exhausted = is_retryable(last.failure_code) and (rate_budget_spent or (self.max_retries > 0 and (failures >= total_attempts or proxies_exhausted)))
         if last.outcome == LookupOutcome.FAILED and exhausted:
-            suffix = "; every configured proxy is now disabled" if proxies_exhausted else ""
+            if rate_budget_spent:
+                message = f"{name} answered 429 to {rate_hits} tries for this name (pauses grew to {last_pause:.0f}s); run the lookup again later and it resumes where it stopped"
+            else:
+                suffix = "; every configured proxy is now disabled" if proxies_exhausted else ""
+                message = f"{len(attempts)} attempt(s) failed; last failure {last.failure_code}: {last.message}{suffix}"
             return LookupResult(
                 queried_name=username,
                 provider=name,
                 outcome=LookupOutcome.FAILED,
                 failure_code=F.RETRIES_EXHAUSTED,
-                message=f"{len(attempts)} attempt(s) failed; last failure {last.failure_code}: {last.message}{suffix}",
+                message=message,
                 attempts=attempts,
             )
         last.attempts = attempts
         return last
+
+    def _rate_limit_pause(self, hit_no: int, retry_after: float | None) -> float:
+        """How long to pause after the ``hit_no``-th 429 for one request: the server's Retry-After the first time, then doubling."""
+        escalated = self.rate_limit_cooldown * (2 ** (hit_no - 1))
+        if retry_after is not None and hit_no == 1:
+            pause = retry_after
+        elif retry_after is not None:
+            pause = max(retry_after, escalated)
+        else:
+            pause = escalated
+        return min(max(pause, 0.0), self.rate_limit_max_cooldown)
 
     def _backoff(self, attempt_no: int) -> float:
         cap = min(self.backoff_max, self.backoff_base * (2 ** (attempt_no - 1)))
@@ -336,6 +392,9 @@ class LookupService:
             return []
         workers = max(1, int(workers or self.settings.get("lookup.workers", 4)))
         window = 2 * workers
+        if self.bulk_lookups and not (cancel is not None and cancel.is_set()):
+            java_names = [n for n, b in items if not (b if b is not None else self._looks_bedrock(n.strip()))]
+            self._prefetch_bulk(java_names, force=force, cancel=cancel)
         results: list[LookupResult | None] = [None] * len(items)
         pending: dict[Future[LookupResult], int] = {}
         next_index = 0
@@ -365,6 +424,90 @@ class LookupService:
                     name, _ = items[idx]
                     results[idx] = self._cancelled(name, "?", [])
         return [r for r in results if r is not None]
+
+    # ------------------------------------------------------------------ bulk
+    def _prefetch_bulk(self, names: list[str], *, force: bool, cancel: threading.Event | None) -> int:
+        """Ask the Java provider for ten names per request; the answers feed the single lookups that follow.
+
+        Mojang's single-name endpoint rate-limits a list of eighty names within
+        seconds, its bulk endpoint answers the same list in eight requests.
+        """
+        provider = self.java_provider()
+        if not getattr(provider, "supports_bulk", False):
+            return 0
+        pname = getattr(provider, "name", "provider")
+        todo: list[str] = []
+        seen: set[str] = set()
+        for raw in names:
+            n = raw.strip()
+            key = n.lower()
+            if not n or key in seen:
+                continue
+            seen.add(key)
+            if not force and self._cache_get(pname, n) is not None:
+                continue
+            todo.append(n)
+        size = max(1, int(getattr(provider, "bulk_size", 10)))
+        fetched = 0
+        for i in range(0, len(todo), size):
+            if cancel is not None and cancel.is_set():
+                break
+            chunk = todo[i : i + size]
+            results = self._bulk_with_retries(provider, chunk, cancel)
+            if results is None:
+                continue  # these names take the single-lookup path
+            for n in chunk:
+                res = results.get(n.lower())
+                if res is None:
+                    continue
+                with self._cache_lock:
+                    self._prefetched[(pname, n.lower())] = res
+                self._cache_set(pname, n, res)
+                fetched += 1
+        return fetched
+
+    def _bulk_with_retries(self, provider: Any, chunk: list[str], cancel: threading.Event | None) -> dict[str, LookupResult] | None:
+        name = getattr(provider, "name", "provider")
+        rotate = self.proxy_pool.mode == "rotate"
+        proxy: ProxyEntry | None = None
+        attempt_no = 0
+        failures = 0
+        rate_hits = 0
+        while True:
+            attempt_no += 1
+            if cancel is not None and cancel.is_set():
+                return None
+            try:
+                self.rate_limiter.acquire(name, cancel)
+            except RateLimitCancelled:
+                return None
+            if self.proxy_pool.enabled:
+                proxy = self.proxy_pool.next_proxy() if (proxy is None or rotate) else proxy
+                if proxy is None:
+                    return None
+            results, attempt, retry_after = provider.attempt_bulk(chunk, attempt_no=attempt_no, proxy=proxy)
+            if results is not None:
+                self.proxy_pool.mark_success(proxy)
+                return results
+            code = attempt.failure_code
+            if code == F.RATE_LIMITED:
+                rate_hits += 1
+                pause = self._rate_limit_pause(rate_hits, retry_after)
+                self.rate_limiter.penalise(name, pause)
+                if rate_hits > self.rate_limit_max_retries:
+                    log.warning("bulk lookup via %s rate limited %d times in a row; the names fall back to single lookups", name, rate_hits)
+                    return None
+                self._sleep(pause)
+                continue
+            if is_proxy_failure(code):
+                self.proxy_pool.mark_failure(proxy)
+                if rotate:
+                    proxy = self.proxy_pool.rotate()
+            failures += 1
+            if not is_retryable(code) or failures > self.max_retries:
+                log.info("bulk lookup of %d names via %s gave up (%s: %s); those names fall back to single lookups", len(chunk), name, code, attempt.error_message[:120])
+                return None
+            self._sleep(self._backoff(failures))
 
     def close(self) -> None:
         for provider in self.providers.values():
@@ -399,7 +542,22 @@ def _most_recent(ordered: list[dict]) -> dict | None:
 
 # -------------------------------------------------------------------- builders
 def _per_provider_rates(settings: dict[str, Any]) -> dict[str, float]:
-    return {"labynet": float(settings.get("lookup.labynet_requests_per_minute", 30)), "crafty": float(settings.get("lookup.crafty_requests_per_minute", 60))}
+    return {
+        "mojang": float(settings.get("lookup.mojang_requests_per_minute", 60)),
+        "minecraftservices": float(settings.get("lookup.minecraftservices_requests_per_minute", 60)),
+        "labynet": float(settings.get("lookup.labynet_requests_per_minute", 30)),
+        "crafty": float(settings.get("lookup.crafty_requests_per_minute", 60)),
+    }
+
+
+def _max_wait(settings: dict[str, Any]) -> float:
+    """A worker may wait out the longest rate-limit pause plus a margin before its lookup is skipped."""
+    return max(120.0, float(settings.get("lookup.rate_limit_max_cooldown_seconds", 300)) + 60.0)
+
+
+def _burst(settings: dict[str, Any]) -> float | None:
+    burst = float(settings.get("lookup.burst", 10) or 0)
+    return burst if burst > 0 else None
 
 
 def build_default_providers(settings: dict[str, Any], client_factory: ClientFactory | None = None) -> dict[str, Any]:
@@ -442,6 +600,6 @@ def build_lookup_service(
     if mode != "direct" and not parsed.entries:
         mode = "direct"
     pool = ProxyPool(parsed.entries, mode=mode, failure_threshold=int(settings.get("lookup.proxy_failure_threshold", 3)), clock=clock)
-    limiter = RateLimiter(float(settings.get("lookup.requests_per_minute", 100)), per_provider=_per_provider_rates(settings), clock=clock, sleep=sleep)
+    limiter = RateLimiter(float(settings.get("lookup.requests_per_minute", 60)), per_provider=_per_provider_rates(settings), burst=_burst(settings), max_wait_seconds=_max_wait(settings), clock=clock, sleep=sleep)
     providers = build_default_providers(settings, client_factory=client_factory)
     return LookupService(settings, providers, pool, limiter, cache, clock=clock, sleep=sleep)

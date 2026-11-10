@@ -66,8 +66,12 @@ UUID:
    decision; `history_mode = always` cross-checks even names Mojang resolves.
 3. Nothing anywhere: `UUID_LOOKUP_HISTORICAL_NAME_UNRESOLVED` as before.
 
-Rate: one crafty.gg call per unresolved name, capped at
-`lookup.crafty_requests_per_minute` (60) and cached for `lookup.cache_ttl_hours`.
+Rate: Mojang is asked ten names per request (`lookup.bulk_lookups`), so a
+list of eighty names costs eight calls; crafty.gg gets one call per name
+nobody holds, capped at `lookup.crafty_requests_per_minute` (60). Answers are
+cached for `lookup.cache_ttl_hours`. A 429 from either provider pauses every
+worker for the `Retry-After` the provider sends, or
+`lookup.rate_limit_cooldown_seconds` when it sends none.
 
 ## Old-server files beat any website
 

@@ -120,6 +120,8 @@ for the list; the most useful ones:
 | `settings get/set/list` | read or change any setting (policy keys queue a recompute) |
 | `key create <name> <role>` / `keys` / `key revoke <id>` | API keys without curl |
 | `identity-import usercache.json` | link old names to UUIDs from the old server's records (upload the file with the File Manager first); `--create` also adds names not seen in screenshots |
+| `ingest [--submitter <name>]` | bulk submit: drag screenshots into the `newuploads` folder in the File Manager, run this, and every readable image is submitted and removed from the folder (unreadable files go to `newuploads/rejected`) |
+| `drive <link> [--submitter <name>]` | download the photos behind a Google Drive folder/file link (shared with "Anyone with the link") into `newuploads` and submit them; folders over 50 files need `settings set drive.api_key "<google api key>"` |
 | `names` | fetch the current Mojang name of every player with a known UUID |
 | `lookup --all --force` | re-run UUID lookups for everyone (Mojang current names, Geyser for Bedrock) |
 | `export preview`, `backup`, `logs 50 warning`, `stop` | |

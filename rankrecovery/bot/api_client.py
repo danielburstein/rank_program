@@ -158,6 +158,15 @@ class RankApiClient:
     async def start_lookup(self, *, everyone: bool = False, retry_failed: bool = False, force: bool = False) -> dict[str, Any]:
         return await self._request("POST", "/identity/lookup", json={"all": everyone, "retry_failed": retry_failed, "force": force})
 
+    async def folder_status(self) -> dict[str, Any]:
+        return await self._request("GET", "/ingest/folder")
+
+    async def ingest_folder(self, *, submitter: str | None = None) -> dict[str, Any]:
+        return await self._request("POST", "/ingest/folder", json={"submitter": submitter, "extract": True}, timeout=120.0)
+
+    async def drive_import(self, url: str, *, submitter: str | None = None) -> dict[str, Any]:
+        return await self._request("POST", "/ingest/drive", json={"url": url, "submitter": submitter, "ingest": True})
+
 
 def _detail(response: httpx.Response) -> str:
     try:

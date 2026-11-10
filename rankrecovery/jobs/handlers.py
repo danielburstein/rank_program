@@ -82,16 +82,45 @@ def convert_players(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> 
     return ConversionService(ctx).recompute(params.get("player_ids") or None, progress=progress, cancel=lambda: job.cancelled)
 
 
+def download_drive(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:
+    """Pull the photos behind a shared Google Drive link into the newuploads folder and, by default, submit them."""
+    import os
+
+    from rankrecovery.services.drive import DriveDownloader
+    from rankrecovery.services.ingest import FolderIngestService
+
+    folder = FolderIngestService(ctx)
+    dest = folder.folder_path()
+    api_key = str(ctx.settings.get("drive.api_key") or os.environ.get("RANKRECOVERY_GOOGLE_API_KEY") or "") or None
+
+    def progress(done: int, total: int | None, name: str) -> None:
+        job.check_cancelled()
+        job.progress(done, total or 0, f"downloaded {done}" + (f"/{total}" if total else "") + f": {name}"[:120])
+
+    job.progress(0, 0, "listing the Drive link")
+    result = DriveDownloader(dest, api_key=api_key, progress=progress).download(str(params.get("url") or ""))
+    out: dict[str, Any] = result.as_dict()
+    for warning in result.warnings:
+        job.error("drive", warning)
+    if params.get("ingest", True) and result.downloaded:
+        job.progress(len(result.downloaded), len(result.downloaded), "submitting downloaded images")
+        summary = folder.ingest(submitter=params.get("submitter") or None, actor=str(params.get("actor") or "drive"), extract=bool(params.get("extract", True)))
+        out["ingest"] = summary.as_dict()
+    return out
+
+
 def lookup_uuids(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:
     from rankrecovery.services.identity import IdentityService
 
     svc = IdentityService(ctx)
-    ids = list(params.get("player_ids") or [])
-    if not ids and params.get("all"):
-        from rankrecovery.services.reconcile import ReconcileService as _R
-
-        ids = _R(ctx).all_player_ids()
-    if not ids:
+    force = bool(params.get("force", False))
+    chosen = list(params.get("player_ids") or [])
+    if chosen:
+        # explicitly selected players: still skip those with a UUID unless the caller forces a re-lookup
+        ids = svc.candidate_player_ids(player_ids=chosen, only_unresolved=False, skip_with_uuid=not force)
+    elif params.get("all"):
+        ids = svc.candidate_player_ids(only_unresolved=False)  # every player without a UUID, whatever the last outcome was
+    else:
         ids = svc.candidate_player_ids(
             only_unresolved=not params.get("retry_failed", False),
             only_failed=bool(params.get("retry_failed", False)),
@@ -157,6 +186,7 @@ def register_default_handlers(runner: JobRunner) -> None:
     runner.register("recompute_players", recompute_players)
     runner.register("convert_players", convert_players)
     runner.register("lookup_uuids", lookup_uuids)
+    runner.register("download_drive", download_drive)
     runner.register("rescan_images", rescan_images)
     runner.register("refresh_names", refresh_names)
     runner.register("reparse_detections", reparse_detections)

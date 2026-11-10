@@ -49,7 +49,9 @@ class AdminConsole:
             "alias": (self.cmd_alias, "alias add <RANK> <ALIAS> | alias remove <RANK> <ALIAS> | alias list: seasonal rank aliases (GLOBAL -> HERO)"),
             "staff-alias": (self.cmd_staff_alias, "staff-alias add <STAFF> <ALIAS> | staff-alias remove <STAFF> <ALIAS>"),
             "convert": (self.cmd_convert, "run Mode 2 conversion"),
-            "lookup": (self.cmd_lookup, "lookup [--retry-failed] [--all] [--force]: queue UUID lookups (--all re-checks resolved players too, --force ignores the cache)"),
+            "lookup": (self.cmd_lookup, "lookup [--retry-failed] [--force]: queue UUID lookups for every player without a UUID (Mojang first, then the last holder of the name; --retry-failed: only names whose last lookup failed; --force ignores cached answers)"),
+            "ingest": (self.cmd_ingest, "ingest [--submitter <name>] [--no-extract]: submit every image dropped into the newuploads folder, then remove it from the folder"),
+            "drive": (self.cmd_drive, "drive <google drive link> [--submitter <name>] [--no-ingest]: download the photos behind a shared Drive folder/file link into newuploads and submit them"),
             "players": (self.cmd_players, "players [search]: list players"),
             "identity-import": (self.cmd_identity_import, "identity-import <file> [--create]: import username/UUID pairs from usercache.json or a CSV (old server records)"),
             "names": (self.cmd_names, "names [--force]: fetch current Mojang names for players with a known UUID"),
@@ -257,6 +259,36 @@ class AdminConsole:
     def cmd_lookup(self, args: list[str]) -> str:
         job_id = self.runner.submit("lookup_uuids", {"retry_failed": "--retry-failed" in args, "force": "--force" in args, "all": "--all" in args}, label="console lookup", created_by="console")
         return f"queued job #{job_id}"
+
+    @staticmethod
+    def _option(args: list[str], name: str) -> str | None:
+        if name in args:
+            i = args.index(name)
+            return args[i + 1] if i + 1 < len(args) else None
+        return None
+
+    def cmd_ingest(self, args: list[str]) -> str:
+        from rankrecovery.services.ingest import FolderIngestService
+
+        svc = FolderIngestService(self.ctx)
+        submitter = self._option(args, "--submitter")
+        summary = svc.ingest(submitter=submitter, actor="console", extract="--no-extract" not in args)
+        if summary.seen == 0:
+            return f"no files waiting in {summary.folder}; drop screenshots there (File Manager) and run 'ingest' again"
+        return summary.text()
+
+    def cmd_drive(self, args: list[str]) -> str:
+        if not args or args[0].startswith("--"):
+            return "usage: drive <google drive link> [--submitter <name>] [--no-ingest]"
+        from rankrecovery.services.drive import parse_drive_link
+
+        try:
+            kind, drive_id = parse_drive_link(args[0])
+        except ValueError as exc:
+            return str(exc)
+        submitter = self._option(args, "--submitter")
+        job_id = self.runner.submit("download_drive", {"url": args[0], "submitter": submitter, "ingest": "--no-ingest" not in args, "actor": "console"}, label=f"download Drive {kind} {drive_id}", created_by="console")
+        return f"queued job #{job_id}: downloading Drive {kind} {drive_id} into the newuploads folder" + (" and submitting it" if "--no-ingest" not in args else "")
 
     def cmd_players(self, args: list[str]) -> str:
         from rankrecovery.services.playerview import PlayerViewService

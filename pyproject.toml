@@ -30,10 +30,11 @@ ocr-easyocr = ["easyocr>=1.7"]
 bot = ["discord.py>=2.3"]
 client = ["PySide6>=6.6"]
 avif = ["pillow-avif-plugin>=1.4"]
+drive = ["gdown>=5.2"]
 postgres = ["psycopg[binary]>=3.1"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.4", "mypy>=1.9"]
 all = [
-    "rankrecovery[server,vision,ocr,bot,client,avif,dev]",
+    "rankrecovery[server,vision,ocr,bot,client,avif,drive,dev]",
 ]
 
 [project.scripts]

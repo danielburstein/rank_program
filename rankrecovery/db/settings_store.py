@@ -95,6 +95,15 @@ class SettingsStore:
             self._maybe_snapshot_policy(s, key, changed_by, reason)
         return True
 
+    def apply_upgrades(self, *, changed_by: str = "startup") -> list[str]:
+        """Retire stored values that can no longer work. Returns the keys that changed."""
+        changed: list[str] = []
+        if self.get("lookup.historical_provider") == "labynet" and not self.get("lookup.labynet_extra_headers"):
+            # laby.net answers automated clients with HTTP 428 unless they hold an access token; crafty.gg serves the same records.
+            if self.set("lookup.historical_provider", "crafty", changed_by=changed_by, reason="laby.net refuses automated clients without an access token (HTTP 428); crafty.gg serves the same name history"):
+                changed.append("lookup.historical_provider")
+        return changed
+
     def set_many(self, values: dict[str, Any], *, changed_by: str = "", reason: str = "") -> list[str]:
         changed = []
         for key, value in values.items():

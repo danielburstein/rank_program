@@ -67,6 +67,15 @@ def test_console_commands(tmp_path):
         assert "-> HERO" in console.run('package-map add "Mystery Crate" HERO')
         assert "'mystery crate' -> HERO" in console.run("package-map list")
         assert "no such player" in console.run("lookups Nobody")
+        ctx.settings.set("ingest.folder", str(tmp_path / "newuploads"), changed_by="test")
+        assert "no files waiting" in console.run("ingest")
+        (tmp_path / "newuploads" / "drop.png").write_bytes(png_bytes(7))
+        ingest_text = console.run("ingest --submitter bob")
+        assert "1 new image(s) submitted" in ingest_text and "extraction queued as job #" in ingest_text
+        assert not (tmp_path / "newuploads" / "drop.png").exists()
+        assert "usage" in console.run("drive")
+        assert "not a Google Drive" in console.run("drive https://example.com/x")
+        assert console.run("lookup").startswith("queued job #")
         assert "could not parse" in console.run('player "unterminated')
     finally:
         runner.stop()

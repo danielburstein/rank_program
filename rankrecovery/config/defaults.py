@@ -160,6 +160,15 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "lookup.java_provider": "mojang",
     "lookup.mojang_name_url": "https://api.mojang.com/users/profiles/minecraft/{name}",
     "lookup.minecraftservices_name_url": "https://api.minecraftservices.com/minecraft/profile/lookup/name/{name}",
+    "lookup.bulk_lookups": True,  # ask Mojang for ten names per request; single lookups only for what the bulk call could not answer
+    "lookup.mojang_bulk_url": "https://api.mojang.com/profiles/minecraft",
+    "lookup.minecraftservices_bulk_url": "https://api.minecraftservices.com/minecraft/profile/lookup/bulk/byname",
+    "lookup.mojang_requests_per_minute": 60,
+    "lookup.minecraftservices_requests_per_minute": 60,
+    "lookup.burst": 10,  # requests that may go out back to back before pacing applies (a fresh limiter used to release a whole minute at once)
+    "lookup.rate_limit_cooldown_seconds": 10,  # first pause after a 429 without a Retry-After; doubles on every further 429 for the same request
+    "lookup.rate_limit_max_cooldown_seconds": 300,  # longest single pause
+    "lookup.rate_limit_max_retries": 10,  # 429s tolerated for one request before it is reported as failed (technical failures use lookup.max_retries)
     "lookup.bedrock_provider": "geyser",
     "lookup.geyser_url": "https://api.geysermc.org/v2/utils/uuid/bedrock_or_java/{name}?prefix={prefix}",
     "lookup.bedrock_prefix": ".",
@@ -184,7 +193,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "lookup.max_retries": 3,
     "lookup.backoff_base_seconds": 1.0,
     "lookup.backoff_max_seconds": 30.0,
-    "lookup.requests_per_minute": 100,
+    "lookup.requests_per_minute": 60,
     "lookup.cache_ttl_hours": 24 * 7,
     "lookup.proxy_mode": "direct",  # direct | rotate | sticky
     "lookup.proxy_failure_threshold": 3,
@@ -196,6 +205,10 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "export.command_template": "lp user {uuid} parent set {group}",
     "export.default_filename": "luckperms_commands.txt",
     # --- database ---
+    # bulk submissions: a folder on the server that staff drop screenshots into, and Google Drive links pulled into it
+    "ingest.folder": "newuploads",  # relative to the server's working directory (the panel's root folder)
+    "ingest.submitter": "folder-upload",  # submitter recorded for dropped files unless the command names one
+    "drive.api_key": "",  # optional Google API key: lists public Drive folders of any size through the Drive API instead of gdown's 50-file page
     "database.backup_dir": "backups",
     # --- GUI ---
     "gui.theme": "dark",
@@ -204,4 +217,4 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "config.version": 1,
 }
 
-SECRET_SETTINGS: frozenset[str] = frozenset({"vision.anthropic_api_key", "lookup.proxy_list"})
+SECRET_SETTINGS: frozenset[str] = frozenset({"vision.anthropic_api_key", "lookup.proxy_list", "drive.api_key"})

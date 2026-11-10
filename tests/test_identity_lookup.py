@@ -39,7 +39,8 @@ class Harness:
         self.proxies_used: list[str | None] = []
         settings = dict(DEFAULT_SETTINGS)
         # these tests exercise the current-name providers on their own; the crafty.gg fallback has its own tests
-        settings.update({"lookup.backoff_base_seconds": 1.0, "lookup.backoff_max_seconds": 8.0, "lookup.max_retries": 2, "lookup.historical_provider": "none"})
+        # the 429 pause starts at the back-off base so the retry timing these tests assert stays 1s, 2s, 4s
+        settings.update({"lookup.backoff_base_seconds": 1.0, "lookup.backoff_max_seconds": 8.0, "lookup.max_retries": 2, "lookup.historical_provider": "none", "lookup.bulk_lookups": False, "lookup.burst": 0, "lookup.rate_limit_cooldown_seconds": 1.0, "lookup.rate_limit_max_retries": 2})
         settings.update(settings_overrides or {})
         self.settings = settings
 

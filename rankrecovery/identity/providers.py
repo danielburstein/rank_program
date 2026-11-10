@@ -25,6 +25,7 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
@@ -256,9 +257,79 @@ class HttpJsonProvider:
         self._clients.close()
 
 
+MOJANG_BULK_URL = "https://api.mojang.com/profiles/minecraft"
+MINECRAFTSERVICES_BULK_URL = "https://api.minecraftservices.com/minecraft/profile/lookup/bulk/byname"
+BULK_SIZE = 10  # Mojang: "A JSON array with no more than 10 player names"
+
+
+def bulk_by_name(provider: HttpJsonProvider, url: str, usernames: list[str], *, attempt_no: int = 1, proxy: ProxyEntry | None = None) -> tuple[dict[str, LookupResult] | None, LookupAttempt, float | None]:
+    """One POST for up to ten names against Mojang's bulk endpoint.
+
+    Returns ``(results keyed by lower-cased name, the request attempt, retry_after)``.
+    Names missing from the response do not exist today (documented behaviour), so
+    they come back NOT_FOUND. ``results`` is None when the request itself failed;
+    the caller then falls back to single lookups.
+    """
+    started_wall = datetime.now(UTC)
+    started = provider._clock()
+    base = LookupAttempt(provider=provider.name, queried_name=",".join(usernames)[:64], attempt_no=attempt_no, started_at=started_wall, elapsed_ms=0, http_status=None, outcome=LookupOutcome.FAILED, proxy_id=proxy.safe_id if proxy else None)
+    try:
+        client = provider._clients.get(proxy.url if proxy else None)
+        response = client.post(url, json=list(usernames), headers=provider.request_headers())
+    except Exception as exc:  # noqa: BLE001 - every transport failure must be classified
+        base.elapsed_ms = int((provider._clock() - started) * 1000)
+        base.failure_code = classify_exception(exc, via_proxy=proxy is not None)
+        base.error_message = scrub_credentials(f"{type(exc).__name__}: {exc}")[:500]
+        return None, base, None
+    base.elapsed_ms = int((provider._clock() - started) * 1000)
+    base.http_status = response.status_code
+    base.raw_excerpt = scrub_credentials(response.text[:200]) if response.content else ""
+    outcome, code = classify_status(response.status_code, frozenset())  # a 404 here is an error, not "no such player"
+    if outcome != LookupOutcome.RESOLVED:
+        base.failure_code = code
+        base.error_message = f"HTTP {response.status_code} from the bulk lookup"
+        return None, base, retry_after_seconds(response) if code == F.RATE_LIMITED else None
+    try:
+        data = json.loads(response.text) if response.content else None
+    except ValueError:
+        base.failure_code = F.INVALID_RESPONSE
+        base.error_message = "bulk response body is not valid JSON"
+        return None, base, None
+    if not isinstance(data, list):
+        base.failure_code = F.INVALID_RESPONSE
+        base.error_message = "bulk response is not a JSON list"
+        return None, base, None
+    found: dict[str, tuple[str, str]] = {}
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        raw_id, name = entry.get("id"), entry.get("name")
+        if not isinstance(raw_id, str) or not isinstance(name, str) or not name:
+            continue
+        uuid = normalise_uuid(raw_id)
+        if uuid is not None:
+            found[name.lower()] = (uuid, name)
+    results: dict[str, LookupResult] = {}
+    for username in usernames:
+        attempt = replace(base, queried_name=username, response_valid=True, error_message=f"bulk lookup: {len(usernames)} names in one request")
+        hit = found.get(username.lower())
+        if hit is not None:
+            attempt.outcome = LookupOutcome.RESOLVED
+            attempt.resolved_uuid, attempt.resolved_name = hit
+            results[username.lower()] = provider._result(username, attempt, LookupOutcome.RESOLVED, hit[0], hit[1], None, "current-name match; historical ownership not verified")
+        else:
+            attempt.outcome = LookupOutcome.NOT_FOUND
+            attempt.failure_code = F.NOT_FOUND
+            attempt.error_message = f"bulk lookup ({len(usernames)} names): no current account with this name"
+            results[username.lower()] = provider._result(username, attempt, LookupOutcome.NOT_FOUND, None, None, F.NOT_FOUND, attempt.error_message)
+    return results, base, None
+
+
 class MojangProvider(HttpJsonProvider):
     name = "mojang"
     not_found_statuses = frozenset({404, 204})
+    supports_bulk = True
+    bulk_size = BULK_SIZE
 
     def __init__(self, settings: dict[str, Any] | None = None, *, client_factory: ClientFactory | None = None, clock=time.monotonic) -> None:
         settings = dict(settings or {})
@@ -268,11 +339,17 @@ class MojangProvider(HttpJsonProvider):
             client_factory=client_factory,
             clock=clock,
         )
+        self.bulk_url = str(settings.get("lookup.mojang_bulk_url") or MOJANG_BULK_URL)
+
+    def attempt_bulk(self, usernames: list[str], *, attempt_no: int = 1, proxy: ProxyEntry | None = None) -> tuple[dict[str, LookupResult] | None, LookupAttempt, float | None]:
+        return bulk_by_name(self, self.bulk_url, usernames, attempt_no=attempt_no, proxy=proxy)
 
 
 class MinecraftServicesProvider(HttpJsonProvider):
     name = "minecraftservices"
     not_found_statuses = frozenset({404})
+    supports_bulk = True
+    bulk_size = BULK_SIZE
 
     def __init__(self, settings: dict[str, Any] | None = None, *, client_factory: ClientFactory | None = None, clock=time.monotonic) -> None:
         settings = dict(settings or {})
@@ -282,6 +359,10 @@ class MinecraftServicesProvider(HttpJsonProvider):
             client_factory=client_factory,
             clock=clock,
         )
+        self.bulk_url = str(settings.get("lookup.minecraftservices_bulk_url") or MINECRAFTSERVICES_BULK_URL)
+
+    def attempt_bulk(self, usernames: list[str], *, attempt_no: int = 1, proxy: ProxyEntry | None = None) -> tuple[dict[str, LookupResult] | None, LookupAttempt, float | None]:
+        return bulk_by_name(self, self.bulk_url, usernames, attempt_no=attempt_no, proxy=proxy)
 
 
 class GeyserBedrockProvider(HttpJsonProvider):

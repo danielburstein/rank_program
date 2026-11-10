@@ -27,6 +27,13 @@ class AppContext:
         self.db = db
         self.settings = settings or SettingsStore(db)
         self._extractor_factory = extractor_factory
+        upgrade = getattr(self.settings, "apply_upgrades", None)
+        if upgrade is not None:
+            try:
+                for key in upgrade():
+                    log.warning("settings upgrade: %s is now %r (the stored value could no longer work)", key, self.settings.get(key))
+            except Exception:  # noqa: BLE001 - a missing table before migrations must not stop start-up
+                log.debug("settings upgrade skipped", exc_info=True)
         self.job_runner: JobRunner | None = None
 
     # ----------------------------------------------------------------- policies

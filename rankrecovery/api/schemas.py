@@ -223,6 +223,17 @@ class LinkNames(BaseModel):
     force: bool = False
 
 
+class IngestFolderBody(BaseModel):
+    submitter: str | None = None
+    extract: bool = True
+
+
+class DriveImportBody(BaseModel):
+    url: str
+    submitter: str | None = None
+    ingest: bool = True
+
+
 class ApiKeyCreate(BaseModel):
     name: str
     role: str = "readonly"

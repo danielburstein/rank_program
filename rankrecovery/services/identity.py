@@ -115,7 +115,8 @@ class IdentityService:
         proxy_text = settings.get("lookup.proxy_list") or None
         return build_lookup_service(settings, proxy_text=proxy_text if isinstance(proxy_text, str) else None, cache=DbLookupCache(self.ctx), client_factory=client_factory)
 
-    def candidate_player_ids(self, *, only_unresolved: bool = True, only_failed: bool = False, only_proxy_failures: bool = False, player_ids: list[int] | None = None) -> list[int]:
+    def candidate_player_ids(self, *, only_unresolved: bool = True, only_failed: bool = False, only_proxy_failures: bool = False, player_ids: list[int] | None = None, skip_with_uuid: bool = True) -> list[int]:
+        """Players a lookup run should visit. Anyone who already has a UUID is left alone unless ``skip_with_uuid`` is off."""
         with self.ctx.db.read_session() as s:
             stmt = select(Player).where(Player.merged_into_id.is_(None))
             if player_ids:
@@ -123,6 +124,8 @@ class IdentityService:
             players = s.execute(stmt.order_by(Player.id)).scalars().all()
             out: list[int] = []
             for p in players:
+                if skip_with_uuid and p.canonical_uuid:
+                    continue
                 if p.identity_status in (IdentityStatus.VERIFIED.value, IdentityStatus.MANUAL.value) and only_unresolved and not only_failed:
                     continue
                 if only_failed and p.identity_status != IdentityStatus.LOOKUP_FAILED.value:

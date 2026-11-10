@@ -103,12 +103,26 @@ listed as unknown; map them once with `package-map add "<package>" <RANK>`
 in the console (or the `csv.package_rank_mapping` setting), retire the batch
 with `csv-retire <id>` and import the file again.
 
+## Bulk submissions: the `newuploads` folder and Google Drive
+
+The server creates a `newuploads` folder next to `main.py` (visible in the
+panel's File Manager). Drag screenshots into it, then run `ingest` in the
+console or `/rr ingest` in Discord: each readable image is submitted exactly
+like a Discord upload, extraction is queued, and the file is removed from the
+folder. Files that are not images stay put and are listed; files that cannot be
+decoded move to `newuploads/rejected`. `drive <link>` (or `/rr drive`) pulls the
+photos behind a Google Drive folder or file link that is shared with "Anyone
+with the link" into the same folder and submits them. Without an API key the
+Drive page lists at most 50 files per folder; set `drive.api_key` to a Google
+API key with the Drive API enabled for bigger folders.
+
 ## Old usernames that have since changed
 
 The UUID lookup (`lookup` in the panel console, `/rr lookup` in Discord, or
 the Identity page of the desktop client) works through every player without a
-UUID in two steps. Mojang is asked who holds the name today; a hit is taken as
-the player and recorded, done. When nobody holds the name any more, crafty.gg's
+UUID, skipping anyone who already has one, in two steps. Mojang is asked who holds the name today (ten names per
+request; a 429 pauses every worker and the pause doubles each time the same
+request is refused again); a hit is taken as the player and recorded, done. When nobody holds the name any more, crafty.gg's
 public API is asked which accounts used it before, and the most recent holder
 is taken; the record and an `IDENTITY_NAME_REUSED` flag list the other
 accounts when there were several. Name reuse means this can hand a rank to the

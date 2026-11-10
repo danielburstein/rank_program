@@ -49,6 +49,26 @@ def upload(client: TestClient, name: str, seed: int, submitter: str, headers: di
     return r.json()
 
 
+def test_ingest_endpoints(client, tmp_path):
+    admin = client.keys["admin"]
+    client.ctx.settings.set("ingest.folder", str(tmp_path / "newuploads"), changed_by="test")
+    assert client.post("/api/v1/ingest/folder", json={}, headers=client.keys["ro"]).status_code == 403
+    r = client.get("/api/v1/ingest/folder", headers=admin)
+    assert r.status_code == 200 and r.json()["count"] == 0 and r.json()["folder"].endswith("newuploads")
+    (tmp_path / "newuploads" / "a.png").write_bytes(png_bytes(1))
+    (tmp_path / "newuploads" / "junk.txt").write_text("x")
+    assert client.get("/api/v1/ingest/folder", headers=admin).json()["waiting"] == ["a.png", "junk.txt"]
+    r = client.post("/api/v1/ingest/folder", json={"submitter": "alice"}, headers=admin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["imported"] == 1 and body["ignored"] == 1 and body["job_id"]
+    assert wait_job(client, body["job_id"])["status"] == "completed"
+    assert client.get("/api/v1/players/by-name/player123", headers=admin).status_code == 200
+    assert not (tmp_path / "newuploads" / "a.png").exists()
+    r = client.post("/api/v1/ingest/drive", json={"url": "https://example.com/nope"}, headers=admin)
+    assert r.status_code == 400 and "Google Drive" in r.json()["detail"]
+
+
 def test_auth_and_roles(client):
     assert client.get("/api/v1/health").status_code == 200
     assert client.get("/api/v1/dashboard").status_code == 401

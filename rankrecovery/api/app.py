@@ -67,6 +67,7 @@ def create_app(ctx: AppContext | None = None, *, start_jobs: bool = True, job_wo
         export,
         identity,
         images,
+        ingest,
         jobs,
         players,
         rescan,
@@ -75,7 +76,7 @@ def create_app(ctx: AppContext | None = None, *, start_jobs: bool = True, job_wo
         settings,
     )
 
-    for module in (players, images, review, jobs, csvimport, identity, conversion, export, search, rescan, settings, discord, admin):
+    for module in (players, images, ingest, review, jobs, csvimport, identity, conversion, export, search, rescan, settings, discord, admin):
         app.include_router(module.router, prefix="/api/v1")
 
     @app.get("/api/v1/health", tags=["meta"])
