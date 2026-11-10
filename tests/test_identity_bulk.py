@@ -222,6 +222,44 @@ def test_cancelled_bulk_prefetch_makes_no_requests():
     assert not h.requests and all(r.outcome == LookupOutcome.SKIPPED for r in results)
 
 
+def test_database_cache_round_trips_on_sqlite_and_serves_repeat_lookups(tmp_path):
+    """SQLite returns naive datetimes; comparing them with an aware now() used to raise inside the cache (seen live)."""
+    from rankrecovery.services.context import AppContext
+    from rankrecovery.services.identity import DbLookupCache, IdentityService
+    from rankrecovery.services.players import get_or_create_player
+
+    db = Database(sqlite_url(tmp_path / "cache.db"))
+    db.run_migrations()
+    ctx = AppContext(db)
+    cache = DbLookupCache(ctx)
+    from rankrecovery.identity.base import LookupResult
+
+    cache[("mojang", "alpha")] = (10_000_000.0, LookupResult(queried_name="Alpha", provider="mojang", outcome=LookupOutcome.RESOLVED, uuid="069a79f4-44e9-4726-a5be-fca90e38aaf5", current_name="Alpha"))
+    hit = cache.get(("mojang", "alpha"))
+    assert hit is not None and hit[1].uuid == "069a79f4-44e9-4726-a5be-fca90e38aaf5" and hit[1].cached
+    assert cache.get(("mojang", "nobody")) is None
+
+    with db.write_session() as s:
+        pid = get_or_create_player(s, "Alpha")[0].id
+        pid2 = get_or_create_player(s, "Ghost")[0].id
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(f"{request.method} {request.url.host}")
+        if request.url.host == "api.crafty.gg":
+            return httpx.Response(404, json={"success": False, "message": "Username not found"})
+        return bulk_handler(request)
+
+    factory = lambda proxy: httpx.Client(transport=httpx.MockTransport(handler), headers={"User-Agent": "test"})  # noqa: E731
+    svc = IdentityService(ctx)
+    first = svc.lookup_players([pid, pid2], service=svc.build_lookup_service(client_factory=factory))
+    assert first.resolved == 1 and first.not_found == 1 and first.failed == 0
+    assert requests == ["POST api.mojang.com", "GET api.crafty.gg"]
+    second = svc.lookup_players([pid2], service=svc.build_lookup_service(client_factory=factory))
+    assert second.not_found == 1 and second.failed == 0 and len(requests) == 2  # both answers came from the database cache
+    db.dispose()
+
+
 def test_startup_retires_labynet_without_a_token(tmp_path):
     from rankrecovery.db.settings_store import SettingsStore
     from rankrecovery.services.context import AppContext

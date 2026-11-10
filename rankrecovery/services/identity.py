@@ -40,6 +40,13 @@ from rankrecovery.services.players import (
 log = logging.getLogger(__name__)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """SQLite hands timezone-aware columns back naive; treat those as UTC so they compare with ``datetime.now(UTC)``."""
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 class DbLookupCache:
     """Mapping-like cache the LookupService can use: (provider, name_key) -> (expires_monotonic, LookupResult)."""
 
@@ -51,10 +58,11 @@ class DbLookupCache:
         provider, name_key = key
         with self.ctx.db.read_session() as s:
             row = s.execute(select(LookupCache).where(LookupCache.provider == provider, LookupCache.name_key == name_key)).scalars().first()
-            if row is None or (row.expires_at and row.expires_at < datetime.now(UTC)):
+            expires_at = _as_utc(row.expires_at) if row is not None else None
+            if row is None or (expires_at and expires_at < datetime.now(UTC)):
                 return default
             result = LookupResult(queried_name=name_key, provider=provider, outcome=LookupOutcome(row.outcome), uuid=row.uuid, current_name=row.current_name, failure_code=row.failure_code, message="cached", is_historical=row.is_historical, cached=True)
-            remaining = (row.expires_at - datetime.now(UTC)).total_seconds() if row.expires_at else 3600.0
+            remaining = (expires_at - datetime.now(UTC)).total_seconds() if expires_at else 3600.0
             return (time.monotonic() + max(remaining, 0.0), result)
 
     def __getitem__(self, key: tuple[str, str]) -> Any:
