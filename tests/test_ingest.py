@@ -174,6 +174,17 @@ def test_gdown_fallback_moves_images_to_the_folder_and_warns_at_the_page_limit(t
     assert result.downloaded == ["single.png"]
 
 
+def test_gdown_calls_match_the_installed_gdown_signature(tmp_path):
+    """gdown's keyword arguments change between releases (fuzzy= vanished in 6.x and broke a live download)."""
+    import inspect
+
+    gdown = pytest.importorskip("gdown")
+    from rankrecovery.services.drive import gdown_file_kwargs, gdown_folder_kwargs
+
+    inspect.signature(gdown.download_folder).bind(**gdown_folder_kwargs("1AbCdEfGhIjKlMnOp", tmp_path))
+    inspect.signature(gdown.download).bind(**gdown_file_kwargs("1AbCdEfGhIjKlMnOp", tmp_path))
+
+
 def test_drive_job_downloads_then_ingests(ctx, tmp_path, monkeypatch):
     from rankrecovery.jobs import handlers
 

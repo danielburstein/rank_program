@@ -38,6 +38,16 @@ _FILE_PATTERNS = [re.compile(p) for p in (rf"drive\.google\.com/file/d/{_ID}", r
 ProgressFn = Callable[[int, int | None, str], None]
 
 
+def gdown_folder_kwargs(drive_id: str, staging: Path) -> dict[str, Any]:
+    """Exactly what ``gdown.download_folder`` is called with (kept in one place so a test can check it against the installed gdown)."""
+    return {"id": drive_id, "output": str(staging), "quiet": True, "use_cookies": False}
+
+
+def gdown_file_kwargs(drive_id: str, staging: Path) -> dict[str, Any]:
+    """Exactly what ``gdown.download`` is called with; the trailing slash makes gdown keep the file's own name."""
+    return {"id": drive_id, "output": str(staging) + "/", "quiet": True, "use_cookies": False}
+
+
 def parse_drive_link(url: str) -> tuple[str, str]:
     """Return ``("folder" | "file", id)`` for a Google Drive link, or raise ValueError."""
     text = (url or "").strip()
@@ -177,13 +187,13 @@ class DriveDownloader:
         staging.mkdir(parents=True, exist_ok=True)
         try:
             if kind == "folder":
-                paths = gdown.download_folder(id=drive_id, output=str(staging), quiet=True, use_cookies=False)
+                paths = gdown.download_folder(**gdown_folder_kwargs(drive_id, staging))
                 if not paths:
                     raise ValueError("Google Drive returned nothing for that folder: it must be shared with 'Anyone with the link' (or set drive.api_key)")
                 if len(paths) >= GDOWN_PAGE_LIMIT:
                     result.warnings.append(f"Google Drive lists at most {GDOWN_PAGE_LIMIT} files per folder without an API key; this folder may hold more. Set drive.api_key to fetch everything.")
             else:
-                path = gdown.download(id=drive_id, output=str(staging) + "/", quiet=True, use_cookies=False, fuzzy=True)
+                path = gdown.download(**gdown_file_kwargs(drive_id, staging))
                 if not path:
                     raise ValueError("Google Drive returned nothing for that file: it must be shared with 'Anyone with the link'")
                 paths = [path]
