@@ -71,8 +71,12 @@ def test_console_commands(tmp_path):
         assert "no files waiting" in console.run("ingest")
         (tmp_path / "newuploads" / "drop.png").write_bytes(png_bytes(7))
         ingest_text = console.run("ingest --submitter bob")
-        assert "1 new image(s) submitted" in ingest_text and "extraction queued as job #" in ingest_text
+        assert ingest_text.startswith("found 1 file(s)") and "queued job #" in ingest_text
+        ingest_job = int(ingest_text.split("#")[1].split()[0])
+        done = runner.wait(ingest_job)
+        assert done["status"] == "completed" and done["result"]["imported"] == 1 and done["result"]["job_id"]
         assert not (tmp_path / "newuploads" / "drop.png").exists()
+        assert "ingest_folder completed" in console.run(f"job {ingest_job}")
         assert "usage" in console.run("drive")
         assert "not a Google Drive" in console.run("drive https://example.com/x")
         assert console.run("lookup").startswith("queued job #")

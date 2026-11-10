@@ -62,9 +62,18 @@ def test_ingest_endpoints(client, tmp_path):
     assert client.get("/api/v1/ingest/folder", headers=admin).json()["waiting"] == ["a.png", "junk.txt", "sub/b.png"]
     r = client.post("/api/v1/ingest/folder", json={"submitter": "alice"}, headers=admin)
     assert r.status_code == 200, r.text
-    body = r.json()
+    queued = r.json()
+    assert queued["found"] == 3 and queued["job_id"]
+    ingest_job = wait_job(client, queued["job_id"])
+    assert ingest_job["status"] == "completed", ingest_job
+    body = ingest_job["result"]
     assert body["imported"] == 2 and body["ignored"] == 1 and body["folders_removed"] == 1 and body["job_id"]
     assert wait_job(client, body["job_id"])["status"] == "completed"
+    again = client.post("/api/v1/ingest/folder", json={}, headers=admin).json()
+    assert again["found"] == 1 and again["job_id"]  # only junk.txt is left; the job reports it as ignored
+    assert wait_job(client, again["job_id"])["result"]["ignored"] == 1
+    (tmp_path / "newuploads" / "junk.txt").unlink()
+    assert client.post("/api/v1/ingest/folder", json={}, headers=admin).json() == {"job_id": None, "found": 0, "folder": queued["folder"]}
     assert client.get("/api/v1/players/by-name/player123", headers=admin).status_code == 200
     assert not (tmp_path / "newuploads" / "a.png").exists()
     r = client.post("/api/v1/ingest/drive", json={"url": "https://example.com/nope"}, headers=admin)

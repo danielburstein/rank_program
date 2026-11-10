@@ -36,7 +36,7 @@ Roles: readonly < bot < staff < admin (see DEPLOYMENT.md).
 | POST `/csv/manual-row`, GET `/csv/batches`, GET `/csv/batches/{id}/rows`, POST `/csv/rows/{id}/deactivate|reactivate` | admin / readonly | purchase rows |
 | POST `/identity/lookup` `{player_ids, retry_failed, retry_proxy_failures, force, workers}` | staff | UUID lookup job (players with a UUID are skipped unless `player_ids` and `force` are given) |
 | GET `/ingest/folder` | staff | The `newuploads` folder path and the files waiting in it |
-| POST `/ingest/folder` `{submitter, extract}` | staff | Submit every image in `newuploads` as if uploaded, remove the files, queue extraction; returns the ingest summary |
+| POST `/ingest/folder` `{submitter, extract}` | staff | Job: submit every image in `newuploads` (and sub-folders) as if uploaded, remove the files, queue extraction; returns `{job_id, found, folder}`, the job's result is the ingest summary |
 | POST `/ingest/drive` `{url, submitter, ingest}` | staff | Job: download a shared Google Drive folder/file into `newuploads` and (by default) submit it |
 | GET `/identity`, POST `/identity/merge/preview`, POST `/identity/merge`, POST `/identity/unmerge/{id}`, GET `/identity/proxies` | staff / admin | identity table and merges |
 | POST `/conversion/run[?sync=true]`, GET `/conversion/preview?included=` | staff / readonly | Mode 2 |

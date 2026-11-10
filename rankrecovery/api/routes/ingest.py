@@ -24,7 +24,14 @@ def folder_status(request: Request, _: Principal = Depends(require(ApiRole.STAFF
 
 @router.post("/ingest/folder")
 def ingest_folder(body: IngestFolderBody, request: Request, principal: Principal = Depends(require(ApiRole.STAFF))) -> dict:
-    return FolderIngestService(ctx_of(request)).ingest(submitter=body.submitter, actor=principal.name, extract=body.extract).as_dict()
+    """Queue the ingest as a job; the summary is the job's result."""
+    svc = FolderIngestService(ctx_of(request))
+    folder = svc.folder_path()
+    waiting = svc.waiting()
+    if not waiting:
+        return {"job_id": None, "found": 0, "folder": str(folder)}
+    job_id = runner_of(request).submit("ingest_folder", {"submitter": body.submitter, "extract": body.extract, "actor": principal.name}, label=f"ingest {len(waiting)} file(s) from {folder.name}", created_by=principal.name, total=len(waiting))
+    return {"job_id": job_id, "found": len(waiting), "folder": str(folder)}
 
 
 @router.post("/ingest/drive")

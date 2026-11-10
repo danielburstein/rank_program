@@ -57,8 +57,10 @@ def test_folder_ingest_submits_removes_and_sorts_out_bad_files(ctx, tmp_path):
     (folder / "Season 3" / "Rejected" / "nested.png").write_bytes(png_bytes(7))  # the keyword is skipped at any depth, any case
 
     assert [p.relative_to(folder).as_posix() for p in svc.waiting()] == ["a.png", "notes.txt", "Season 3/b.png", "Season 3/deeper/bad.png", "Season 3/deeper/dup.png"]
-    summary = svc.ingest(submitter="alice", actor="test")
+    ticks: list[tuple[int, int]] = []
+    summary = svc.ingest(submitter="alice", actor="test", progress=lambda done, total, msg: ticks.append((done, total)))
     assert (summary.seen, summary.imported, summary.duplicates, summary.rejected, summary.ignored, summary.folders_removed) == (5, 2, 1, 1, 1, 1)
+    assert ticks == [(1, 5), (2, 5), (3, 5), (4, 5), (5, 5)]
     assert not (folder / "a.png").exists() and not (folder / "Season 3" / "b.png").exists()
     assert not (folder / "Season 3" / "deeper").exists()  # emptied and removed
     assert (folder / "Season 3").exists()  # still holds the skipped Rejected folder

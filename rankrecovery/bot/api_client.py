@@ -162,7 +162,7 @@ class RankApiClient:
         return await self._request("GET", "/ingest/folder")
 
     async def ingest_folder(self, *, submitter: str | None = None) -> dict[str, Any]:
-        return await self._request("POST", "/ingest/folder", json={"submitter": submitter, "extract": True}, timeout=120.0)
+        return await self._request("POST", "/ingest/folder", json={"submitter": submitter, "extract": True})
 
     async def drive_import(self, url: str, *, submitter: str | None = None) -> dict[str, Any]:
         return await self._request("POST", "/ingest/drive", json={"url": url, "submitter": submitter, "ingest": True})

@@ -271,11 +271,12 @@ class AdminConsole:
         from rankrecovery.services.ingest import FolderIngestService
 
         svc = FolderIngestService(self.ctx)
+        waiting = svc.waiting()
+        if not waiting:
+            return f"no files waiting in {svc.folder_path()}; drop screenshots there (File Manager) and run 'ingest' again"
         submitter = self._option(args, "--submitter")
-        summary = svc.ingest(submitter=submitter, actor="console", extract="--no-extract" not in args)
-        if summary.seen == 0:
-            return f"no files waiting in {summary.folder}; drop screenshots there (File Manager) and run 'ingest' again"
-        return summary.text()
+        job_id = self.runner.submit("ingest_folder", {"submitter": submitter, "extract": "--no-extract" not in args, "actor": "console"}, label=f"ingest {len(waiting)} file(s) from {svc.folder_path().name}", created_by="console", total=len(waiting))
+        return f"found {len(waiting)} file(s) in {svc.folder_path()}; queued job #{job_id} (watch it with 'job {job_id}'; processed files disappear from the folder as they go)"
 
     def cmd_drive(self, args: list[str]) -> str:
         if not args or args[0].startswith("--"):

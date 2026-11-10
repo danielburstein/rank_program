@@ -96,18 +96,15 @@ class AdminCog(commands.Cog, name="Admin"):
     async def ingest(self, interaction: discord.Interaction, submitter: str | None = None) -> None:
         await interaction.response.defer(ephemeral=True)
         try:
-            summary = await api_of(interaction).ingest_folder(submitter=submitter)
+            queued = await api_of(interaction).ingest_folder(submitter=submitter)
         except ApiError as exc:
             await interaction.followup.send(f"Ingest failed: {exc.message}")
             return
-        if not summary.get("seen"):
-            await interaction.followup.send(f"Nothing waiting in `{summary.get('folder')}`. Drop screenshots there with the panel's File Manager and run this again.")
+        if not queued.get("found"):
+            await interaction.followup.send(f"Nothing waiting in `{queued.get('folder')}`. Drop screenshots there with the panel's File Manager and run this again.")
             return
-        lines = [f"Submitted {summary.get('imported', 0)} new image(s) from `{summary.get('folder')}`" + (f", {summary['duplicates']} duplicate(s) already known" if summary.get("duplicates") else "") + (f", {summary['rejected']} unreadable file(s) moved to rejected/" if summary.get("rejected") else "") + (f", {summary['ignored']} non-image file(s) left in place" if summary.get("ignored") else "") + (f", {summary['folders_removed']} emptied sub-folder(s) removed" if summary.get("folders_removed") else "") + "."]
-        if summary.get("job_id"):
-            lines.append(f"Extraction queued as job #{summary['job_id']}; follow it with `/rr job {summary['job_id']}`.")
-        lines += [f"• {d}" for d in (summary.get("details") or [])[:8]]
-        await interaction.followup.send("\n".join(lines)[:1900])
+        job_id = queued.get("job_id")
+        await interaction.followup.send(f"Found {queued['found']} file(s) in `{queued.get('folder')}`; submitting them as job #{job_id}. Processed files disappear from the folder as they go, extraction is queued at the end. Follow it with `/rr job {job_id}`.")
 
     @rr.command(name="drive", description="Download the photos behind a shared Google Drive link into newuploads and submit them")
     @app_commands.describe(link="A Google Drive folder or file link shared with 'Anyone with the link'", submitter="Who took these screenshots")

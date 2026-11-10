@@ -82,6 +82,20 @@ def convert_players(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> 
     return ConversionService(ctx).recompute(params.get("player_ids") or None, progress=progress, cancel=lambda: job.cancelled)
 
 
+def ingest_folder(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:
+    """Submit every image waiting in the newuploads folder (and its sub-folders), with progress per file."""
+    from rankrecovery.services.ingest import FolderIngestService
+
+    def progress(done: int, total: int, message: str) -> None:
+        job.check_cancelled()
+        job.progress(done, total, f"{done}/{total} files: {message}")
+
+    summary = FolderIngestService(ctx).ingest(submitter=params.get("submitter") or None, actor=str(params.get("actor") or "ingest"), extract=bool(params.get("extract", True)), progress=progress)
+    for detail in summary.details[:50]:
+        job.error("file", detail)
+    return summary.as_dict()
+
+
 def download_drive(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:
     """Pull the photos behind a shared Google Drive link into the newuploads folder and, by default, submit them."""
     import os
@@ -103,8 +117,12 @@ def download_drive(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> d
     for warning in result.warnings:
         job.error("drive", warning)
     if params.get("ingest", True) and result.downloaded:
-        job.progress(len(result.downloaded), len(result.downloaded), "submitting downloaded images")
-        summary = folder.ingest(submitter=params.get("submitter") or None, actor=str(params.get("actor") or "drive"), extract=bool(params.get("extract", True)))
+
+        def ingest_progress(done: int, total: int, message: str) -> None:
+            job.check_cancelled()
+            job.progress(done, total, f"submitting {done}/{total}: {message}")
+
+        summary = folder.ingest(submitter=params.get("submitter") or None, actor=str(params.get("actor") or "drive"), extract=bool(params.get("extract", True)), progress=ingest_progress)
         out["ingest"] = summary.as_dict()
     return out
 
@@ -187,6 +205,7 @@ def register_default_handlers(runner: JobRunner) -> None:
     runner.register("convert_players", convert_players)
     runner.register("lookup_uuids", lookup_uuids)
     runner.register("download_drive", download_drive)
+    runner.register("ingest_folder", ingest_folder)
     runner.register("rescan_images", rescan_images)
     runner.register("refresh_names", refresh_names)
     runner.register("reparse_detections", reparse_detections)

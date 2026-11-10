@@ -14,6 +14,7 @@ left where they are and reported.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -116,7 +117,8 @@ class FolderIngestService:
                 continue
         return removed
 
-    def ingest(self, *, submitter: str | None = None, actor: str = "console", extract: bool = True, delete: bool = True) -> IngestSummary:
+    def ingest(self, *, submitter: str | None = None, actor: str = "console", extract: bool = True, delete: bool = True, progress: Callable[[int, int, str], None] | None = None) -> IngestSummary:
+        """Import every waiting file. ``progress(done, total, label)`` is called after each file; it may raise to cancel."""
         folder = self.folder_path()
         files = self.waiting()
         summary = IngestSummary(folder=str(folder))
@@ -126,7 +128,10 @@ class FolderIngestService:
         submitter = (submitter or str(self.ctx.settings.get("ingest.submitter") or "")).strip() or None
         summary.batch_id = images.create_batch(source="folder", label=f"{folder.name} {datetime.now(UTC):%Y-%m-%d %H:%M}", submitter_name=submitter, created_by=actor, notes=f"{len(files)} file(s) found in {folder}")
         rejected_dir = folder / REJECTED_DIR
+        total = len(files)
         for path in files:
+            if progress is not None and summary.seen:
+                progress(summary.seen, total, f"{summary.imported} imported, {summary.duplicates} duplicates, {summary.rejected} rejected")
             summary.seen += 1
             rel = path.relative_to(folder)
             label = rel.as_posix()
@@ -164,6 +169,8 @@ class FolderIngestService:
                     path.unlink()
                 except OSError as exc:  # pragma: no cover - permissions
                     summary.details.append(f"{label}: imported but could not be removed ({exc})")
+        if progress is not None:
+            progress(summary.seen, total, f"{summary.imported} imported, {summary.duplicates} duplicates, {summary.rejected} rejected")
         if delete:
             summary.folders_removed = self._remove_empty_subfolders(folder)
         runner = getattr(self.ctx, "job_runner", None)
