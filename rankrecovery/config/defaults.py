@@ -208,6 +208,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # bulk submissions: a folder on the server that staff drop screenshots into, and Google Drive links pulled into it
     "ingest.folder": "newuploads",  # relative to the server's working directory (the panel's root folder)
     "ingest.submitter": "folder-upload",  # submitter recorded for dropped files unless the command names one
+    "ingest.skip_folders": ["rejected"],  # sub-folder names the ingest passes over at any depth (rejected is always skipped)
     "drive.api_key": "",  # optional Google API key: lists public Drive folders of any size through the Drive API instead of gdown's 50-file page
     "database.backup_dir": "backups",
     # --- GUI ---

@@ -56,6 +56,7 @@ GROUP_TITLES = {
 LABELS = {
     "ingest.folder": "Folder on the server that staff drop screenshots into (relative to the server's working directory)",
     "ingest.submitter": "Submitter recorded for dropped files when the command names none",
+    "ingest.skip_folders": "Sub-folder names the ingest passes over (rejected is always skipped)",
     "drive.api_key": "Google API key (optional; lists Drive folders of any size)",
     "lookup.bulk_lookups": "Ask Mojang for ten names per request before single lookups",
     "lookup.history_mode": "History check: fallback = only when nobody holds the name now, always = cross-check every name",

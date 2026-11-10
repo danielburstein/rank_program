@@ -42,21 +42,35 @@ def test_folder_ingest_submits_removes_and_sorts_out_bad_files(ctx, tmp_path):
     folder = svc.folder_path()
     assert folder == tmp_path / "newuploads" and folder.is_dir()
     (folder / "a.png").write_bytes(png_bytes(1))
-    (folder / "b.png").write_bytes(png_bytes(2))
-    (folder / "dup.png").write_bytes(png_bytes(1))
-    (folder / "bad.png").write_bytes(b"this is not a png")
+    (folder / "Season 3").mkdir()
+    (folder / "Season 3" / "b.png").write_bytes(png_bytes(2))
+    (folder / "Season 3" / "deeper").mkdir()
+    (folder / "Season 3" / "deeper" / "dup.png").write_bytes(png_bytes(1))
+    (folder / "Season 3" / "deeper" / "bad.png").write_bytes(b"this is not a png")
     (folder / "notes.txt").write_text("hello")
     (folder / ".DS_Store").write_bytes(b"\x00")
+    (folder / ".hidden").mkdir()
+    (folder / ".hidden" / "c.png").write_bytes(png_bytes(5))
+    (folder / "rejected").mkdir()
+    (folder / "rejected" / "old.png").write_bytes(png_bytes(6))  # already rejected once: passed over
+    (folder / "Season 3" / "Rejected").mkdir()
+    (folder / "Season 3" / "Rejected" / "nested.png").write_bytes(png_bytes(7))  # the keyword is skipped at any depth, any case
 
+    assert [p.relative_to(folder).as_posix() for p in svc.waiting()] == ["a.png", "notes.txt", "Season 3/b.png", "Season 3/deeper/bad.png", "Season 3/deeper/dup.png"]
     summary = svc.ingest(submitter="alice", actor="test")
-    assert (summary.seen, summary.imported, summary.duplicates, summary.rejected, summary.ignored) == (5, 2, 1, 1, 1)
-    assert not (folder / "a.png").exists() and not (folder / "b.png").exists() and not (folder / "dup.png").exists()
-    assert (folder / "rejected" / "bad.png").exists() and (folder / "notes.txt").exists()
+    assert (summary.seen, summary.imported, summary.duplicates, summary.rejected, summary.ignored, summary.folders_removed) == (5, 2, 1, 1, 1, 1)
+    assert not (folder / "a.png").exists() and not (folder / "Season 3" / "b.png").exists()
+    assert not (folder / "Season 3" / "deeper").exists()  # emptied and removed
+    assert (folder / "Season 3").exists()  # still holds the skipped Rejected folder
+    assert (folder / "rejected" / "Season 3" / "deeper" / "bad.png").exists() and (folder / "rejected" / "old.png").exists()
+    assert (folder / "notes.txt").exists() and (folder / ".hidden" / "c.png").exists() and (folder / "Season 3" / "Rejected" / "nested.png").exists()
+    assert "Season 3/deeper/dup.png: identical" in summary.text() and "1 emptied sub-folder(s) removed" in summary.text()
     assert summary.job_id == 1 and ctx.job_runner.submitted == [("extract_images", {"image_ids": summary.image_ids})]
     assert "new image(s) submitted" in summary.text() and "identical to image" in summary.text()
     with ctx.db.read_session() as s:
         images = s.execute(select(SourceImage)).scalars().all()
         assert len(images) == 2 and all(img.import_batch_id == summary.batch_id for img in images)
+        assert sorted(img.original_path for img in images) == ["newuploads/Season 3/b.png", "newuploads/a.png"]
         batch = s.get(ImportBatch, summary.batch_id)
         assert batch.source == "folder" and s.get(Submitter, batch.submitter_id).name == "alice"
 

@@ -106,11 +106,13 @@ with `csv-retire <id>` and import the file again.
 ## Bulk submissions: the `newuploads` folder and Google Drive
 
 The server creates a `newuploads` folder next to `main.py` (visible in the
-panel's File Manager). Drag screenshots into it, then run `ingest` in the
-console or `/rr ingest` in Discord: each readable image is submitted exactly
-like a Discord upload, extraction is queued, and the file is removed from the
-folder. Files that are not images stay put and are listed; files that cannot be
-decoded move to `newuploads/rejected`. `drive <link>` (or `/rr drive`) pulls the
+panel's File Manager). Drag screenshots, or whole folders of them, into it,
+then run `ingest` in the console or `/rr ingest` in Discord: each readable
+image in the folder and its sub-folders is submitted exactly like a Discord
+upload, extraction is queued, the file is removed, and emptied sub-folders are
+deleted. Folders named in `ingest.skip_folders` (`rejected` by default) are
+passed over. Files that are not images stay put and are listed; files that
+cannot be decoded move to `newuploads/rejected`, keeping their sub-folder path. `drive <link>` (or `/rr drive`) pulls the
 photos behind a Google Drive folder or file link that is shared with "Anyone
 with the link" into the same folder and submits them. Without an API key the
 Drive page lists at most 50 files per folder; set `drive.api_key` to a Google

@@ -17,8 +17,9 @@ router = APIRouter(tags=["ingest"])
 @router.get("/ingest/folder")
 def folder_status(request: Request, _: Principal = Depends(require(ApiRole.STAFF))) -> dict:
     svc = FolderIngestService(ctx_of(request))
+    folder = svc.folder_path()
     waiting = svc.waiting()
-    return {"folder": str(svc.folder_path()), "count": len(waiting), "waiting": [p.name for p in waiting[:200]]}
+    return {"folder": str(folder), "count": len(waiting), "waiting": [p.relative_to(folder).as_posix() for p in waiting[:200]]}
 
 
 @router.post("/ingest/folder")

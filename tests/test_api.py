@@ -57,11 +57,13 @@ def test_ingest_endpoints(client, tmp_path):
     assert r.status_code == 200 and r.json()["count"] == 0 and r.json()["folder"].endswith("newuploads")
     (tmp_path / "newuploads" / "a.png").write_bytes(png_bytes(1))
     (tmp_path / "newuploads" / "junk.txt").write_text("x")
-    assert client.get("/api/v1/ingest/folder", headers=admin).json()["waiting"] == ["a.png", "junk.txt"]
+    (tmp_path / "newuploads" / "sub").mkdir()
+    (tmp_path / "newuploads" / "sub" / "b.png").write_bytes(png_bytes(2))
+    assert client.get("/api/v1/ingest/folder", headers=admin).json()["waiting"] == ["a.png", "junk.txt", "sub/b.png"]
     r = client.post("/api/v1/ingest/folder", json={"submitter": "alice"}, headers=admin)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["imported"] == 1 and body["ignored"] == 1 and body["job_id"]
+    assert body["imported"] == 2 and body["ignored"] == 1 and body["folders_removed"] == 1 and body["job_id"]
     assert wait_job(client, body["job_id"])["status"] == "completed"
     assert client.get("/api/v1/players/by-name/player123", headers=admin).status_code == 200
     assert not (tmp_path / "newuploads" / "a.png").exists()

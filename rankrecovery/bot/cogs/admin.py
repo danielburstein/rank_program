@@ -103,7 +103,7 @@ class AdminCog(commands.Cog, name="Admin"):
         if not summary.get("seen"):
             await interaction.followup.send(f"Nothing waiting in `{summary.get('folder')}`. Drop screenshots there with the panel's File Manager and run this again.")
             return
-        lines = [f"Submitted {summary.get('imported', 0)} new image(s) from `{summary.get('folder')}`" + (f", {summary['duplicates']} duplicate(s) already known" if summary.get("duplicates") else "") + (f", {summary['rejected']} unreadable file(s) moved to rejected/" if summary.get("rejected") else "") + (f", {summary['ignored']} non-image file(s) left in place" if summary.get("ignored") else "") + "."]
+        lines = [f"Submitted {summary.get('imported', 0)} new image(s) from `{summary.get('folder')}`" + (f", {summary['duplicates']} duplicate(s) already known" if summary.get("duplicates") else "") + (f", {summary['rejected']} unreadable file(s) moved to rejected/" if summary.get("rejected") else "") + (f", {summary['ignored']} non-image file(s) left in place" if summary.get("ignored") else "") + (f", {summary['folders_removed']} emptied sub-folder(s) removed" if summary.get("folders_removed") else "") + "."]
         if summary.get("job_id"):
             lines.append(f"Extraction queued as job #{summary['job_id']}; follow it with `/rr job {summary['job_id']}`.")
         lines += [f"• {d}" for d in (summary.get("details") or [])[:8]]
