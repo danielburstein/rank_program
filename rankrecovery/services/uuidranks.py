@@ -41,7 +41,7 @@ class UuidRankService:
         policy = self.ctx.policy()
         mapping = self.ctx.mapping()
         now = datetime.now(UTC)
-        summary = {"uuids": 0, "records_merged": 0, "resolved_without_rank": 0, "unresolved_left_as_is": 0, "computed_at": now.isoformat()}
+        summary: dict[str, Any] = {"uuids": 0, "records_merged": 0, "resolved_without_rank": 0, "unresolved_left_as_is": 0, "unresolved_by_status": {}, "computed_at": now.isoformat()}
         with self.ctx.db.write_session() as s:
             aliases: dict[int, set[str]] = {}
             for player_id, username in s.execute(select(PlayerAlias.player_id, PlayerAlias.username)).all():
@@ -50,6 +50,8 @@ class UuidRankService:
             for player, ps in s.execute(select(Player, PlayerSummary).outerjoin(PlayerSummary, PlayerSummary.player_id == Player.id).where(Player.merged_into_id.is_(None))).all():
                 if not player.canonical_uuid or player.identity_status not in RESOLVED:
                     summary["unresolved_left_as_is"] += 1
+                    status = player.identity_status or "unresolved"
+                    summary["unresolved_by_status"][status] = summary["unresolved_by_status"].get(status, 0) + 1
                     continue
                 groups.setdefault(player.canonical_uuid, []).append((player, ps))
             s.execute(delete(UuidRank))

@@ -62,6 +62,7 @@ def test_rebuild_collapses_records_per_uuid_to_the_highest_rank(ctx):
 
     summary = UuidRankService(ctx).rebuild(actor="test")
     assert summary == {**summary, "uuids": 2, "records_merged": 1, "resolved_without_rank": 0, "unresolved_left_as_is": 2}
+    assert summary["unresolved_by_status"] == {"ambiguous": 1, "not_attempted": 1}
     rows = {r["uuid"]: r for r in UuidRankService(ctx).rows()}
     assert set(rows) == {UUID_X, UUID_Z}
     x = rows[UUID_X]

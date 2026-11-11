@@ -299,7 +299,11 @@ class AdminConsole:
         action = args[0].lower() if args else "rebuild"
         if action == "rebuild":
             s = svc.rebuild(actor="console")
-            return f"uuid_ranks rebuilt: {s['uuids']} uuid(s) · {s['records_merged']} duplicate record(s) collapsed · {s['resolved_without_rank']} resolved without a rank (left out) · {s['unresolved_left_as_is']} unresolved (left as is)"
+            text = f"uuid_ranks rebuilt: {s['uuids']} uuid(s) · {s['records_merged']} duplicate record(s) collapsed · {s['resolved_without_rank']} resolved without a rank (left out) · {s['unresolved_left_as_is']} unresolved (left as is)"
+            if s.get("unresolved_by_status"):
+                text += "\n  unresolved by reason: " + ", ".join(f"{k} {v}" for k, v in sorted(s["unresolved_by_status"].items(), key=lambda kv: -kv[1]))
+                text += "\n  (not_attempted = never looked up, run 'lookup'; unresolved = no account found for the name; lookup_failed = retry with 'lookup --retry-failed'; ambiguous = needs a manual choice; bedrock_pending = Floodgate name without a Geyser match)"
+            return text
         if action == "list":
             n = int(args[1]) if len(args) > 1 and args[1].isdigit() else 30
             rows = svc.rows(limit=n)

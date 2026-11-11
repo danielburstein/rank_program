@@ -99,7 +99,9 @@ class AdminCog(commands.Cog, name="Admin"):
         except ApiError as exc:
             await interaction.followup.send(f"Rebuild failed: {exc.message}")
             return
-        await interaction.followup.send(f"uuid_ranks rebuilt: {s.get('uuids', 0)} UUID(s), {s.get('records_merged', 0)} duplicate record(s) collapsed, {s.get('resolved_without_rank', 0)} resolved without a rank left out, {s.get('unresolved_left_as_is', 0)} unresolved left as they are.")
+        by_status = s.get("unresolved_by_status") or {}
+        detail = (" Unresolved by reason: " + ", ".join(f"{k} {v}" for k, v in sorted(by_status.items(), key=lambda kv: -kv[1])) + ".") if by_status else ""
+        await interaction.followup.send(f"uuid_ranks rebuilt: {s.get('uuids', 0)} UUID(s), {s.get('records_merged', 0)} duplicate record(s) collapsed, {s.get('resolved_without_rank', 0)} resolved without a rank left out, {s.get('unresolved_left_as_is', 0)} unresolved left as they are.{detail}")
 
     @rr.command(name="ingest", description="Submit every screenshot dropped into the server's newuploads folder")
     @app_commands.describe(submitter="Who took these screenshots (recorded as the submitter)")
