@@ -67,6 +67,7 @@ class AdminConsole:
             "keys": (self.cmd_keys, "keys: list API keys"),
             "key": (self.cmd_key, "key create <name> <admin|staff|bot|readonly> | key revoke <id>"),
             "export": (self.cmd_export, "export preview: command count and skip reasons"),
+            "uuid-ranks": (self.cmd_uuid_ranks, "uuid-ranks [rebuild|list [n]|csv <file>]: the uuid_ranks table, one row per resolved UUID with its highest rank (rebuilt after every job)"),
             "csv-batches": (self.cmd_csv_batches, "list trusted-CSV import batches"),
             "csv-retire": (self.cmd_csv_retire, "csv-retire <batch id>: retire a batch so its file can be imported again"),
             "package-map": (self.cmd_package_map, "package-map add \"<package name>\" <RANK> | remove \"<package name>\" | list: store packages that do not name their rank"),
@@ -290,6 +291,30 @@ class AdminConsole:
         submitter = self._option(args, "--submitter")
         job_id = self.runner.submit("download_drive", {"url": args[0], "submitter": submitter, "ingest": "--no-ingest" not in args, "actor": "console"}, label=f"download Drive {kind} {drive_id}", created_by="console")
         return f"queued job #{job_id}: downloading Drive {kind} {drive_id} into the newuploads folder" + (" and submitting it" if "--no-ingest" not in args else "")
+
+    def cmd_uuid_ranks(self, args: list[str]) -> str:
+        from rankrecovery.services.uuidranks import UuidRankService
+
+        svc = UuidRankService(self.ctx)
+        action = args[0].lower() if args else "rebuild"
+        if action == "rebuild":
+            s = svc.rebuild(actor="console")
+            return f"uuid_ranks rebuilt: {s['uuids']} uuid(s) · {s['records_merged']} duplicate record(s) collapsed · {s['resolved_without_rank']} resolved without a rank (left out) · {s['unresolved_left_as_is']} unresolved (left as is)"
+        if action == "list":
+            n = int(args[1]) if len(args) > 1 and args[1].isdigit() else 30
+            rows = svc.rows(limit=n)
+            if not rows:
+                return "uuid_ranks is empty; run 'uuid-ranks rebuild'"
+            return "\n".join(f"{r['uuid']}  {r['highest_rank']:<10} -> {r['new_rank'] or '-':<10} {r['current_name'] or '?':<17} records {r['records']}  names {', '.join(r['usernames'])}"[:200] for r in rows) + (f"\n… {svc.count()} total" if svc.count() > n else "")
+        if action == "csv":
+            if len(args) < 2:
+                return "usage: uuid-ranks csv <file>"
+            from pathlib import Path
+
+            path = Path(args[1])
+            path.write_text(svc.csv_text(), encoding="utf-8")
+            return f"wrote {svc.count()} row(s) to {path} (download it with the File Manager)"
+        return "usage: uuid-ranks [rebuild|list [n]|csv <file>]"
 
     def cmd_players(self, args: list[str]) -> str:
         from rankrecovery.services.playerview import PlayerViewService

@@ -158,6 +158,9 @@ class RankApiClient:
     async def start_lookup(self, *, everyone: bool = False, retry_failed: bool = False, force: bool = False) -> dict[str, Any]:
         return await self._request("POST", "/identity/lookup", json={"all": everyone, "retry_failed": retry_failed, "force": force})
 
+    async def rebuild_uuid_ranks(self) -> dict[str, Any]:
+        return await self._request("POST", "/uuid-ranks/rebuild", timeout=120.0)
+
     async def folder_status(self) -> dict[str, Any]:
         return await self._request("GET", "/ingest/folder")
 

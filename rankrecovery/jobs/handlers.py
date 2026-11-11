@@ -10,6 +10,7 @@ from typing import Any
 
 from rankrecovery.jobs.runner import JobHandle, JobRunner
 from rankrecovery.services.context import AppContext
+from rankrecovery.services.uuidranks import refresh_uuid_ranks
 
 log = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ def extract_images(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> d
         recon.recompute_player(pid)
         if i % 20 == 0:
             job.progress(len(ids), len(ids), f"recomputing players {i}/{len(stale)}")
+    refresh_uuid_ranks(ctx, actor="extraction")
     return {"images": len(ids), "failed": failed, "players_recomputed": len(stale), "workers": workers}
 
 
@@ -125,6 +127,7 @@ def recompute_players(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -
         from rankrecovery.services.conversion import ConversionService
 
         ConversionService(ctx).recompute(ids or None)
+    refresh_uuid_ranks(ctx, actor="recompute")
     return {"players": len(ids)}
 
 
@@ -135,7 +138,9 @@ def convert_players(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> 
         if done % 25 == 0 or done == total:
             job.progress(done, total, f"{done}/{total} conversions")
 
-    return ConversionService(ctx).recompute(params.get("player_ids") or None, progress=progress, cancel=lambda: job.cancelled)
+    out = ConversionService(ctx).recompute(params.get("player_ids") or None, progress=progress, cancel=lambda: job.cancelled)
+    refresh_uuid_ranks(ctx, actor="conversion")
+    return out
 
 
 def ingest_folder(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:
@@ -214,7 +219,11 @@ def lookup_uuids(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dic
     recon = ReconcileService(ctx)
     for pid in recon.stale_player_ids():
         recon.recompute_player(pid)
-    return {"resolved": summary.resolved, "not_found": summary.not_found, "failed": summary.failed, "skipped": summary.skipped, "merged": summary.merged}
+    out = {"resolved": summary.resolved, "not_found": summary.not_found, "failed": summary.failed, "skipped": summary.skipped, "merged": summary.merged}
+    ranks = refresh_uuid_ranks(ctx, actor="lookup")
+    if ranks:
+        out["uuid_ranks"] = ranks["uuids"]
+    return out
 
 
 def reparse_detections(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dict[str, Any]:

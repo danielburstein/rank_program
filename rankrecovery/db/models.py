@@ -531,6 +531,29 @@ class LookupAttemptRow(Base):
     job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"))
 
 
+class UuidRank(Base):
+    """One row per resolved account: the highest effective rank across every name record linked to that UUID.
+
+    Rebuilt in full by ``UuidRankService.rebuild``; players without a verified or manual
+    UUID never appear here and are left untouched.
+    """
+
+    __tablename__ = "uuid_ranks"
+
+    uuid: Mapped[str] = mapped_column(String(36), primary_key=True)
+    current_name: Mapped[str | None] = mapped_column(String(64), index=True)
+    highest_rank: Mapped[str] = mapped_column(String(32), index=True)
+    rank_priority: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    new_rank: Mapped[str | None] = mapped_column(String(64), index=True)
+    usernames: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    player_ids: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    ranks_seen: Mapped[list[Any]] = mapped_column(JSON, default=list)  # effective rank of each contributing record, lowest first
+    identity_sources: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    is_bedrock: Mapped[bool] = mapped_column(Boolean, default=False)
+    records: Mapped[int] = mapped_column(Integer, default=1)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class LookupCache(Base):
     __tablename__ = "lookup_cache"
     __table_args__ = (UniqueConstraint("provider", "name_key", name="uq_lookup_cache"),)

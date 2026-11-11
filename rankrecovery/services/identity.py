@@ -544,6 +544,9 @@ class IdentityService:
             survivor_id = survivor.id
         recon.recompute_player(survivor_id)
         ConversionService(self.ctx).recompute([survivor_id])
+        from rankrecovery.services.uuidranks import refresh_uuid_ranks
+
+        refresh_uuid_ranks(self.ctx, actor=actor)
         return {"player_id": survivor_id, "uuid": uuid_norm, "current_username": current_username, "merged": merged}
 
     def link_by_names(self, old_username: str, current_username: str, *, actor: str, note: str = "", force: bool = False, service: Any | None = None) -> dict[str, Any]:

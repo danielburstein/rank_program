@@ -80,6 +80,10 @@ def test_console_commands(tmp_path):
         assert "usage" in console.run("drive")
         assert "not a Google Drive" in console.run("drive https://example.com/x")
         assert console.run("lookup").startswith("queued job #")
+        assert "uuid_ranks rebuilt: 1 uuid(s)" in console.run("uuid-ranks")  # Player123 got its UUID from the identity import above
+        assert "069a79f4-44e9-4726-a5be-fca90e38aaf5  HERO" in console.run("uuid-ranks list")
+        assert "wrote 1 row(s)" in console.run(f'uuid-ranks csv "{tmp_path / "uuid_ranks.csv"}"')
+        assert (tmp_path / "uuid_ranks.csv").read_text().startswith("uuid,current_name,highest_rank")
         assert "could not parse" in console.run('player "unterminated')
     finally:
         runner.stop()

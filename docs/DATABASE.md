@@ -35,12 +35,23 @@ server API, or stop the server first, or use PostgreSQL.
 
 ## Schema
 
-34 tables (see `rankrecovery/db/models.py`). Raw evidence tables
+35 tables (see `rankrecovery/db/models.py`). Raw evidence tables
 (`source_images`, `image_metadata`, `extraction_runs`, `detections`, `csv_rows`,
 `manual_assertions`, `lookup_attempts`) are never rewritten by recomputes.
 Derived tables (`player_summaries`, `verification_results`, `conversions`,
 `export_batches`) are recomputed from evidence and carry the policy fingerprint
 and version used.
+
+`uuid_ranks` is the flat hand-off table: one row per resolved account (a
+player whose UUID is verified or set by hand), keyed by `uuid`, with the
+highest effective rank across every name record that maps to that UUID
+(`highest_rank`, `rank_priority`), the new rank it maps to (`new_rank`), every
+username involved (`usernames`), the contributing `player_ids`, the ranks each
+record had (`ranks_seen`) and `current_name`. Players without a resolved UUID
+are not in it and are left as they are. It is rebuilt in full after every
+lookup, extraction, recompute, conversion and approved claim, or on demand
+with `uuid-ranks rebuild` / `POST /uuid-ranks/rebuild`; `uuid-ranks csv` and
+`GET /uuid-ranks/export.csv` give it as CSV.
 
 Migrations: Alembic (`rankrecovery/db/migrations`). `rankrecovery-admin init-db`
 or the server start-up upgrades to head automatically. Create a new revision with

@@ -90,6 +90,17 @@ class AdminCog(commands.Cog, name="Admin"):
         job_id = job.get("job_id")
         await interaction.followup.send(f"Queued UUID lookup as job #{job_id}. Players who already have a UUID are skipped; each remaining old name is checked against Mojang first, and names nobody holds today go to the most recent account that used them. Follow it with `/rr job {job_id}`.")
 
+    @rr.command(name="uuidranks", description="Rebuild the uuid_ranks table: one row per resolved UUID with its highest rank")
+    @staff_only()
+    async def uuidranks(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            s = await api_of(interaction).rebuild_uuid_ranks()
+        except ApiError as exc:
+            await interaction.followup.send(f"Rebuild failed: {exc.message}")
+            return
+        await interaction.followup.send(f"uuid_ranks rebuilt: {s.get('uuids', 0)} UUID(s), {s.get('records_merged', 0)} duplicate record(s) collapsed, {s.get('resolved_without_rank', 0)} resolved without a rank left out, {s.get('unresolved_left_as_is', 0)} unresolved left as they are.")
+
     @rr.command(name="ingest", description="Submit every screenshot dropped into the server's newuploads folder")
     @app_commands.describe(submitter="Who took these screenshots (recorded as the submitter)")
     @staff_only()

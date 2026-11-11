@@ -80,6 +80,22 @@ def test_ingest_endpoints(client, tmp_path):
     assert r.status_code == 400 and "Google Drive" in r.json()["detail"]
 
 
+def test_uuid_ranks_endpoints(client):
+    admin = client.keys["admin"]
+    bot = client.keys["bot"]
+    out = upload(client, "a.png", 1, "alice", bot)
+    wait_job(client, out["job_id"])
+    pid = client.get("/api/v1/players/by-name/player123", headers=bot).json()["player"]["player_id"]
+    assert client.post(f"/api/v1/players/{pid}/uuid", json={"uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5", "reason": "test"}, headers=admin).status_code == 200
+    assert client.post("/api/v1/uuid-ranks/rebuild", headers=client.keys["ro"]).status_code == 403
+    s = client.post("/api/v1/uuid-ranks/rebuild", headers=admin).json()
+    assert s["uuids"] == 1
+    listing = client.get("/api/v1/uuid-ranks", headers=client.keys["ro"]).json()
+    assert listing["total"] == 1 and listing["rows"][0]["uuid"] == "069a79f4-44e9-4726-a5be-fca90e38aaf5" and listing["rows"][0]["highest_rank"]
+    csv_text = client.get("/api/v1/uuid-ranks/export.csv", headers=client.keys["ro"])
+    assert csv_text.status_code == 200 and csv_text.headers["content-type"].startswith("text/csv") and csv_text.text.startswith("uuid,current_name")
+
+
 def test_auth_and_roles(client):
     assert client.get("/api/v1/health").status_code == 200
     assert client.get("/api/v1/dashboard").status_code == 401
