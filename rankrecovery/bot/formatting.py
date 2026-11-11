@@ -92,8 +92,8 @@ def rank_embed(detail: dict[str, Any], *, staff_view: bool) -> discord.Embed:
     fields: list[tuple[str, str, bool]] = []
     fields.append(("Effective old rank", effective or "none confirmed", True))
     fields.append(("Highest observed", summary.get("highest_observed") or "none", True))
-    new_rank = conversion.get("new_rank") if conversion else None
-    fields.append(("New rank", new_rank or "not mapped", True))
+    new_rank = summary.get("new_rank") or (conversion.get("new_rank") if conversion else None)
+    fields.append(("New rank", new_rank or ("not mapped" if effective else "none"), True))
     fields.append(("All observed ranks", _join(list(summary.get("observed_ranks") or [])), False))
     staff_ranks = list(summary.get("staff_ranks") or [])
     if staff_ranks:

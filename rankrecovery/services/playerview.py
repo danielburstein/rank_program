@@ -39,6 +39,7 @@ class PlayerViewService:
 
     # ------------------------------------------------------------------ table
     def table(self, *, search: str = "", limit: int = 200, offset: int = 0, sort: str = "display_name", descending: bool = False, only_stale: bool = False, only_provisional: bool = False, flag: str | None = None) -> dict[str, Any]:
+        policy, mapping = self.ctx.policy(), self.ctx.mapping()
         with self.ctx.db.read_session() as s:
             stmt = select(Player, PlayerSummary).outerjoin(PlayerSummary, PlayerSummary.player_id == Player.id).where(Player.merged_into_id.is_(None))
             if search:
@@ -90,8 +91,9 @@ class PlayerViewService:
                         "active_flags": summary.active_flags if summary else [],
                         "resolved_flags": sorted(set(resolved)),
                         "manual_override": summary.manual_override_active if summary else False,
-                        "new_rank": conv.new_rank if conv else None,
-                        "export_included": conv.included if conv else False,
+                        # derived from the current effective rank, never from a stored conversion that may predate it
+                        "new_rank": mapping.new_rank_for(summary.effective_rank if summary else None, policy),
+                        "export_included": bool(conv and conv.included and not conv.stale),
                         "stale": summary.stale if summary else True,
                         "compact": summary.compact_text if summary else f"{p.display_name} : not computed",
                     }
@@ -109,6 +111,7 @@ class PlayerViewService:
 
     # ----------------------------------------------------------------- detail
     def detail(self, player_id: int) -> dict[str, Any] | None:
+        policy, mapping = self.ctx.policy(), self.ctx.mapping()
         with self.ctx.db.read_session() as s:
             p = s.get(Player, player_id)
             if p is None:
@@ -221,8 +224,21 @@ class PlayerViewService:
                     "computed_at": summary.computed_at.isoformat() if summary and summary.computed_at else None,
                     "stale": summary.stale if summary else True,
                     "compact": summary.compact_text if summary else "",
+                    # what the effective rank maps to under the current mapping; independent of any stored conversion
+                    "new_rank": mapping.new_rank_for(summary.effective_rank if summary else None, policy),
                 },
-                "conversion": {"old_rank": conv.old_rank, "new_rank": conv.new_rank, "included": conv.included, "reasons": conv.reasons, "stale": conv.stale, "manual_approval": conv.manual_approval, "mapping_fingerprint": conv.mapping_fingerprint} if conv else None,
+                "conversion": {
+                    # old/new rank follow the current effective rank: a stored row can predate the latest evidence
+                    "old_rank": summary.effective_rank if summary else None,
+                    "new_rank": mapping.new_rank_for(summary.effective_rank if summary else None, policy),
+                    "included": bool(conv.included and not conv.stale),
+                    "reasons": list(conv.reasons or []) + (["export eligibility is being refreshed (the rank changed since it was last evaluated)"] if conv.stale else []),
+                    "stale": conv.stale,
+                    "manual_approval": conv.manual_approval,
+                    "mapping_fingerprint": conv.mapping_fingerprint,
+                }
+                if conv
+                else None,
                 "verification": verification,
                 "observations": observations,
                 "staff_observations": staff,

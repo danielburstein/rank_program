@@ -45,6 +45,15 @@ def create_app(ctx: AppContext | None = None, *, start_jobs: bool = True, job_wo
     async def lifespan(app: FastAPI):
         if start_jobs:
             runner.start()
+            try:
+                from rankrecovery.services.conversion import ConversionService
+
+                outdated = len(ConversionService(ctx).stale_player_ids())
+                if outdated:
+                    job_id = runner.submit("convert_players", {"only_stale": True}, label=f"refresh {outdated} out-of-date conversion(s)", created_by="startup", total=outdated)
+                    log.info("%d conversion(s) are missing or out of date; refreshing them as job #%s", outdated, job_id)
+            except Exception:  # noqa: BLE001 - a housekeeping failure must not stop the server
+                log.exception("could not queue the conversion refresh")
         log.info("rankrecovery server %s started (%s)", __version__, ctx.db.describe_concurrency())
         try:
             yield

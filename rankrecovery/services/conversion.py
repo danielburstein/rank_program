@@ -75,6 +75,19 @@ class ConversionService:
                 progress(n, len(ids))
         return counts
 
+    def stale_player_ids(self) -> list[int]:
+        """Players whose conversion is missing or was computed before their rank summary last changed."""
+        with self.ctx.db.read_session() as s:
+            rows = s.execute(select(Player.id, Conversion.id, Conversion.stale).outerjoin(Conversion, Conversion.player_id == Player.id).where(Player.merged_into_id.is_(None)).order_by(Player.id)).all()
+            return [pid for pid, conv_id, stale in rows if conv_id is None or stale]
+
+    def refresh_stale(self, *, progress: Callable[[int, int], None] | None = None, cancel: Callable[[], bool] | None = None) -> dict[str, int]:
+        """Recompute only the conversions that are missing or out of date. Cheap when nothing changed."""
+        ids = self.stale_player_ids()
+        if not ids:
+            return {"included": 0, "excluded": 0, "total": 0}
+        return self.recompute(ids, progress=progress, cancel=cancel)
+
     def set_manual_approval(self, player_id: int, approved: bool, *, actor: str, reason: str) -> None:
         from rankrecovery.services.audit import audit
 

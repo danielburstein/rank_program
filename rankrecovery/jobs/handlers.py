@@ -109,6 +109,10 @@ def extract_images(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> d
         recon.recompute_player(pid)
         if i % 20 == 0:
             job.progress(len(ids), len(ids), f"recomputing players {i}/{len(stale)}")
+    from rankrecovery.services.conversion import ConversionService
+
+    job.progress(len(ids), len(ids), "refreshing old-to-new rank conversions")
+    ConversionService(ctx).refresh_stale(cancel=lambda: job.cancelled)  # a new rank must never be shown against an outdated old rank
     refresh_uuid_ranks(ctx, actor="extraction")
     return {"images": len(ids), "failed": failed, "players_recomputed": len(stale), "workers": workers}
 
@@ -138,7 +142,11 @@ def convert_players(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> 
         if done % 25 == 0 or done == total:
             job.progress(done, total, f"{done}/{total} conversions")
 
-    out = ConversionService(ctx).recompute(params.get("player_ids") or None, progress=progress, cancel=lambda: job.cancelled)
+    svc = ConversionService(ctx)
+    if params.get("only_stale"):
+        out = svc.refresh_stale(progress=progress, cancel=lambda: job.cancelled)
+    else:
+        out = svc.recompute(params.get("player_ids") or None, progress=progress, cancel=lambda: job.cancelled)
     refresh_uuid_ranks(ctx, actor="conversion")
     return out
 
@@ -219,6 +227,9 @@ def lookup_uuids(ctx: AppContext, job: JobHandle, params: dict[str, Any]) -> dic
     recon = ReconcileService(ctx)
     for pid in recon.stale_player_ids():
         recon.recompute_player(pid)
+    from rankrecovery.services.conversion import ConversionService
+
+    ConversionService(ctx).refresh_stale(cancel=lambda: job.cancelled)
     out = {"resolved": summary.resolved, "not_found": summary.not_found, "failed": summary.failed, "skipped": summary.skipped, "merged": summary.merged}
     ranks = refresh_uuid_ranks(ctx, actor="lookup")
     if ranks:
