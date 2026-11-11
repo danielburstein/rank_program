@@ -322,6 +322,18 @@ class ServerClient:
     def identity_table(self, limit: int = 500, offset: int = 0) -> list[dict]:
         return self.get("/identity", limit=limit, offset=offset)
 
+    def review_queue(self, limit: int = 5, offset: int = 0, include_skipped: bool = False, search: str = "") -> dict:
+        return self.get("/identity/review-queue", limit=limit, offset=offset, include_skipped=str(include_skipped).lower(), search=search or None)
+
+    def review_set_uuid(self, player_id: int, uuid: str, note: str = "") -> dict:
+        return self.post(f"/identity/review-queue/{player_id}/uuid", {"uuid": uuid, "note": note})
+
+    def review_skip(self, player_id: int, reason: str = "") -> dict:
+        return self.post(f"/identity/review-queue/{player_id}/skip", {"reason": reason})
+
+    def review_unskip(self, player_id: int) -> dict:
+        return self.post(f"/identity/review-queue/{player_id}/unskip", {})
+
     def merge_preview(self, survivor_id: int, merged_id: int) -> dict:
         return self.post("/identity/merge/preview", {"survivor_id": survivor_id, "merged_id": merged_id, "reason": "preview"})
 

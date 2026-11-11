@@ -158,6 +158,15 @@ class RankApiClient:
     async def start_lookup(self, *, everyone: bool = False, retry_failed: bool = False, force: bool = False) -> dict[str, Any]:
         return await self._request("POST", "/identity/lookup", json={"all": everyone, "retry_failed": retry_failed, "force": force})
 
+    async def review_queue(self, *, limit: int = 3, offset: int = 0, include_skipped: bool = False) -> dict[str, Any]:
+        return await self._request("GET", "/identity/review-queue", params={"limit": limit, "offset": offset, "include_skipped": str(include_skipped).lower()})
+
+    async def review_set_uuid(self, player_id: int, uuid: str, *, note: str = "") -> dict[str, Any]:
+        return await self._request("POST", f"/identity/review-queue/{player_id}/uuid", json={"uuid": uuid, "note": note}, timeout=60.0)
+
+    async def review_skip(self, player_id: int, *, reason: str = "") -> dict[str, Any]:
+        return await self._request("POST", f"/identity/review-queue/{player_id}/skip", json={"reason": reason})
+
     async def rebuild_uuid_ranks(self) -> dict[str, Any]:
         return await self._request("POST", "/uuid-ranks/rebuild", timeout=120.0)
 

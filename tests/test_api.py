@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from rankrecovery.api.app import create_app
 from rankrecovery.api.auth import create_api_key
-from rankrecovery.core.enums import ApiRole, LeadingIcon, TrailingIcon
+from rankrecovery.core.enums import ApiRole, LeadingIcon, LookupOutcome, TrailingIcon
 from rankrecovery.db.engine import Database, sqlite_url
 from rankrecovery.services.context import AppContext
 from tests.helpers import StubExtractor, png_bytes, tab
@@ -78,6 +78,40 @@ def test_ingest_endpoints(client, tmp_path):
     assert not (tmp_path / "newuploads" / "a.png").exists()
     r = client.post("/api/v1/ingest/drive", json={"url": "https://example.com/nope"}, headers=admin)
     assert r.status_code == 400 and "Google Drive" in r.json()["detail"]
+
+
+def test_manual_review_endpoints(client, monkeypatch):
+    from rankrecovery.identity.base import LookupResult
+    from rankrecovery.services import identity as identity_module
+
+    class FakeProfile:
+        def __init__(self, settings):
+            pass
+
+        def lookup(self, uuid):
+            return LookupResult(queried_name=uuid, provider="mojang_profile", outcome=LookupOutcome.RESOLVED, uuid=uuid, current_name="Player123Now")
+
+    monkeypatch.setattr("rankrecovery.identity.providers.MojangProfileProvider", FakeProfile)
+    admin, bot = client.keys["admin"], client.keys["bot"]
+    wait_job(client, upload(client, "a.png", 1, "alice", bot)["job_id"])
+    assert client.get("/api/v1/identity/review-queue", headers=client.keys["ro"]).status_code == 403
+    queue = client.get("/api/v1/identity/review-queue?limit=5", headers=admin).json()
+    names = [it["name"] for it in queue["items"]]
+    assert "Player123" in names and queue["items"][0]["namemc_url"].startswith("https://namemc.com/search?q=")
+    pid = next(it["player_id"] for it in queue["items"] if it["name"] == "Player123")
+    staffy = next(it["player_id"] for it in queue["items"] if it["name"] == "Staffy")
+    assert client.post(f"/api/v1/identity/review-queue/{staffy}/skip", json={"reason": "bot"}, headers=admin).json()["ok"]
+    assert "Staffy" not in [it["name"] for it in client.get("/api/v1/identity/review-queue", headers=admin).json()["items"]]
+    assert client.post(f"/api/v1/identity/review-queue/{staffy}/unskip", headers=admin).json()["reopened"] == 1
+    assert client.post(f"/api/v1/identity/review-queue/{pid}/uuid", json={"uuid": "nope", "note": ""}, headers=admin).status_code == 422
+    assert client.post(f"/api/v1/identity/review-queue/{pid}/uuid", json={"uuid": "z" * 32, "note": ""}, headers=admin).status_code == 400
+    assert client.post("/api/v1/identity/review-queue/999999/uuid", json={"uuid": "069a79f444e94726a5befca90e38aaf5"}, headers=admin).status_code == 404
+    r = client.post(f"/api/v1/identity/review-queue/{pid}/uuid", json={"uuid": "069a79f444e94726a5befca90e38aaf5", "note": "namemc"}, headers=admin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["uuid"] == "069a79f4-44e9-4726-a5be-fca90e38aaf5" and body["current_name"] == "Player123Now" and body["verified"] and body["effective_rank"]
+    assert "Player123" not in [it["name"] for it in client.get("/api/v1/identity/review-queue", headers=admin).json()["items"]]
+    assert identity_module.REVIEW_SKIP_FLAG == "IDENTITY_REVIEW_SKIPPED"
 
 
 def test_uuid_ranks_endpoints(client):

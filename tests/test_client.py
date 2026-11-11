@@ -156,6 +156,19 @@ class FakeClient:
 
     def __init__(self):
         self.updated: dict = {}
+        self.review_calls: list[tuple] = []
+
+    def review_queue(self, **params):
+        self.review_calls.append(("queue", params))
+        return {"total": 0, "items": []}
+
+    def review_set_uuid(self, player_id, uuid, note=""):
+        self.review_calls.append(("set", player_id, uuid, note))
+        return {"uuid": uuid, "current_name": "Someone", "effective_rank": "HERO", "new_rank": "thug", "message": ""}
+
+    def review_skip(self, player_id, reason=""):
+        self.review_calls.append(("skip", player_id, reason))
+        return {"ok": True}
 
     def health(self):
         return {"status": "ok", "version": "0.1.0", "database": "SQLite", "vision_configured": False}
@@ -235,6 +248,28 @@ class FakeClient:
         return None
 
 
+def test_identity_review_page_cards(app):
+    from rankrecovery.client.pages.identity_review import IdentityReviewPage
+    from rankrecovery.client.state import AppState
+
+    page = IdentityReviewPage(AppState(ClientConfig(), FakeClient()))
+    items = [
+        {"player_id": 1, "name": "BigShot", "aliases": ["BigShot", "Big_Shot"], "effective_rank": "GALACTIC", "images": 2, "identity_status": "unresolved", "why": "nobody holds the name", "candidates": [], "namemc_url": "https://namemc.com/search?q=BigShot"},
+        {"player_id": 2, "name": "Cooper719", "aliases": ["Cooper719"], "effective_rank": None, "highest_observed": "HERO", "images": 1, "identity_status": "ambiguous", "why": "", "candidates": [{"uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5", "current_name": "Notch"}], "namemc_url": "https://namemc.com/search?q=Cooper719"},
+    ]
+    page._show({"total": 7, "items": items})
+    assert [c.title() for c in page.cards] == ["BigShot", "Cooper719"] and "2 shown · 7 waiting" in page.counter.text()
+    card = page.cards[0]
+    page._set_uuid(card)  # empty field: nothing sent
+    assert card.result.text() == "Paste a UUID first." and card.set_btn.isEnabled()
+    page._set_done(card, {"uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5", "current_name": "BigShotNow", "effective_rank": "GALACTIC", "new_rank": "assassin", "message": ""})
+    assert card.finished and "account now called BigShotNow" in card.result.text() and "GALACTIC → assassin" in card.result.text() and page.done == 1
+    page._skip_done(page.cards[1])
+    assert page.cards[1].finished and all(c.finished for c in page.cards)
+    page._show({"total": 0, "items": []})
+    assert page.cards == [] and "nothing left to review" in page.counter.text()
+
+
 def test_settings_page_builds_every_key_and_roundtrips(app):
     from rankrecovery.client.pages.settings import SettingsPage
     from rankrecovery.client.state import AppState
@@ -268,7 +303,7 @@ def test_main_window_with_fake_client(app, tmp_path):
     config = ClientConfig(base_url="http://fake", api_key="k", path=tmp_path / "client.json")
     window = create_main_window(config, FakeClient())
     assert window.windowTitle() == "Rank Recovery"
-    assert window.stack.count() == len(PAGES) == 13
+    assert window.stack.count() == len(PAGES) == 14
     drain(app)
     assert window.state.flag_catalogue and window.state.policy.get("ranks")
     window.show_page("players")

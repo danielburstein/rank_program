@@ -67,6 +67,9 @@ class AdminConsole:
             "keys": (self.cmd_keys, "keys: list API keys"),
             "key": (self.cmd_key, "key create <name> <admin|staff|bot|readonly> | key revoke <id>"),
             "export": (self.cmd_export, "export preview: command count and skip reasons"),
+            "unresolved": (self.cmd_unresolved, "unresolved [n] [--skipped]: names without a UUID for manual review, highest rank first, with NameMC links"),
+            "set-uuid": (self.cmd_set_uuid, "set-uuid <name> <uuid> [note]: give a name its UUID by hand; Mojang confirms the current name"),
+            "skip-name": (self.cmd_skip_name, "skip-name <name> [reason] | skip-name <name> --undo: leave a name out of (or put it back into) the manual review queue"),
             "uuid-ranks": (self.cmd_uuid_ranks, "uuid-ranks [rebuild|list [n]|csv <file>]: the uuid_ranks table, one row per resolved UUID with its highest rank (rebuilt after every job)"),
             "csv-batches": (self.cmd_csv_batches, "list trusted-CSV import batches"),
             "csv-retire": (self.cmd_csv_retire, "csv-retire <batch id>: retire a batch so its file can be imported again"),
@@ -291,6 +294,59 @@ class AdminConsole:
         submitter = self._option(args, "--submitter")
         job_id = self.runner.submit("download_drive", {"url": args[0], "submitter": submitter, "ingest": "--no-ingest" not in args, "actor": "console"}, label=f"download Drive {kind} {drive_id}", created_by="console")
         return f"queued job #{job_id}: downloading Drive {kind} {drive_id} into the newuploads folder" + (" and submitting it" if "--no-ingest" not in args else "")
+
+    def _player_id(self, name: str) -> int | None:
+        from rankrecovery.services.playerview import PlayerViewService
+
+        d = PlayerViewService(self.ctx).lookup_by_name(name)
+        return int(d["player"]["player_id"]) if d else None
+
+    def cmd_unresolved(self, args: list[str]) -> str:
+        from rankrecovery.services.identity import IdentityService
+
+        n = next((int(a) for a in args if a.isdigit()), 10)
+        data = IdentityService(self.ctx).review_queue(limit=n, include_skipped="--skipped" in args)
+        if not data["items"]:
+            return "nothing left to review: every name has a UUID or was skipped"
+        lines = [f"{data['total']} name(s) waiting; showing {len(data['items'])}. Look them up on NameMC, then 'set-uuid <name> <uuid>' or 'skip-name <name>'."]
+        for it in data["items"]:
+            rank = it.get("effective_rank") or it.get("highest_observed") or "no rank yet"
+            lines.append(f"  {it['name']:<17} {rank:<10} {it['images']} img  {it['identity_status']:<14} {it['namemc_url']}" + (f"  [{', '.join(a for a in it['aliases'] if a != it['name'])}]" if len(it["aliases"]) > 1 else "") + ("  (skipped)" if it.get("skipped") else ""))
+            for c in it.get("candidates") or []:
+                lines.append(f"      candidate {c['uuid']} (now {c.get('current_name') or '?'})")
+            if it.get("why"):
+                lines.append(f"      {str(it['why'])[:140]}")
+        return "\n".join(lines)
+
+    def cmd_set_uuid(self, args: list[str]) -> str:
+        if len(args) < 2:
+            return "usage: set-uuid <name> <uuid> [note]"
+        from rankrecovery.services.identity import IdentityService
+
+        pid = self._player_id(args[0])
+        if pid is None:
+            return "no such player"
+        try:
+            r = IdentityService(self.ctx).resolve_manually(pid, args[1], actor="console", note=" ".join(args[2:]))
+        except ValueError as exc:
+            return str(exc)
+        now = f"account now called {r['current_name']}" if r.get("current_name") else "Mojang could not confirm a current name"
+        return f"{args[0]} -> {r['uuid']} · {now} · rank {r.get('effective_rank') or 'none yet'}" + (f" -> {r['new_rank']}" if r.get("new_rank") else "") + (f" · {r['message']}" if r.get("message") else "")
+
+    def cmd_skip_name(self, args: list[str]) -> str:
+        if not args:
+            return "usage: skip-name <name> [reason] | skip-name <name> --undo"
+        from rankrecovery.services.identity import IdentityService
+
+        pid = self._player_id(args[0])
+        if pid is None:
+            return "no such player"
+        svc = IdentityService(self.ctx)
+        if "--undo" in args:
+            n = svc.unskip_identity_review(pid, actor="console")
+            return f"{args[0]} is back in the review queue" if n else f"{args[0]} was not skipped"
+        svc.skip_identity_review(pid, actor="console", reason=" ".join(a for a in args[1:]) or "could not find the account by hand")
+        return f"{args[0]} skipped; it stays out of the review queue until 'skip-name {args[0]} --undo'"
 
     def cmd_uuid_ranks(self, args: list[str]) -> str:
         from rankrecovery.services.uuidranks import UuidRankService

@@ -35,6 +35,9 @@ Roles: readonly < bot < staff < admin (see DEPLOYMENT.md).
 | POST `/csv/preview`, POST `/csv/import` (multipart + `mapping` JSON, `delimiter`, `reject_invalid`, `notes`) | admin | trusted purchase CSV |
 | POST `/csv/manual-row`, GET `/csv/batches`, GET `/csv/batches/{id}/rows`, POST `/csv/rows/{id}/deactivate|reactivate` | admin / readonly | purchase rows |
 | POST `/identity/lookup` `{player_ids, retry_failed, retry_proxy_failures, force, workers}` | staff | UUID lookup job (players with a UUID are skipped unless `player_ids` and `force` are given) |
+| GET `/identity/review-queue?limit&offset&include_skipped&search` | staff | Names without a UUID for manual review, highest rank first, with aliases, why the lookup failed, candidate accounts and a NameMC link |
+| POST `/identity/review-queue/{player_id}/uuid` `{uuid, note}` | staff | Set the UUID by hand; Mojang confirms the current name; recompute, conversion and `uuid_ranks` follow; returns `{uuid, current_name, verified, effective_rank, new_rank, ...}` |
+| POST `/identity/review-queue/{player_id}/skip` `{reason}`, `.../unskip` | staff | Leave a name out of (or put it back into) the review queue |
 | GET `/uuid-ranks?limit&offset&search&rank` | readonly | The `uuid_ranks` table: one row per resolved UUID with its highest rank, new rank, usernames and contributing records |
 | GET `/uuid-ranks/export.csv` | readonly | The same table as CSV (list columns joined with `\|`) |
 | POST `/uuid-ranks/rebuild` | staff | Rebuild the table from the current players and summaries (also happens after every lookup, extraction, recompute and conversion job) |

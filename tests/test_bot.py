@@ -226,6 +226,29 @@ class FakeApi:
         return None
 
 
+def test_unresolved_view_and_texts():
+    import discord
+
+    from rankrecovery.bot.views import UnresolvedView, UuidModal, result_text, unresolved_text
+
+    items = [
+        {"player_id": 1, "name": "BigShot", "aliases": ["BigShot", "Big_Shot"], "effective_rank": "GALACTIC", "images": 2, "why": "no current account named 'BigShot'", "candidates": []},
+        {"player_id": 2, "name": "Cooper719", "aliases": ["Cooper719"], "effective_rank": None, "highest_observed": "HERO", "images": 1, "why": "", "candidates": [{"uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5", "current_name": "Notch"}]},
+    ]
+    view = UnresolvedView(items)
+    labels = [c.label for c in view.children if isinstance(c, discord.ui.Button)]
+    assert labels == ["Set UUID: BigShot", "Skip: BigShot", "Set UUID: Cooper719", "Skip: Cooper719"]
+    assert {c.custom_id for c in view.children} == {"rr:setuuid:1", "rr:skipname:1", "rr:setuuid:2", "rr:skipname:2"}
+    assert len(UnresolvedView([items[0]] * 9).children) == 10  # at most five names, one row each
+    text = unresolved_text(items)
+    assert "**1. BigShot** · GALACTIC · 2 screenshot(s) · <https://namemc.com/search?q=BigShot>" in text
+    assert "also seen as Big\\_Shot" in text and "candidate `069a79f4-44e9-4726-a5be-fca90e38aaf5` (now Notch)" in text and "no current account" in text
+    modal = UuidModal(items[0])
+    assert modal.title == "Set UUID for BigShot" and modal.uuid.min_length == 32 and not modal.note.required
+    assert "account is now called **Notch**" in result_text("BigShot", {"uuid": "x", "current_name": "Notch", "effective_rank": "GALACTIC", "new_rank": "assassin"})
+    assert "could not confirm" in result_text("BigShot", {"uuid": "x", "current_name": None, "effective_rank": None, "message": "no profile"})
+
+
 async def test_every_command_fits_discord_limits():
     """Discord rejects the whole sync when one description is over 100 characters (seen live on /rr lookup)."""
     from discord import app_commands
@@ -270,7 +293,7 @@ async def test_create_bot_registers_commands():
         names = {c.name for c in bot.tree.get_commands()}
         assert {"rank", "myrank", "link", "unlink", "claim", "submit", "rr"} <= names
         rr = next(c for c in bot.tree.get_commands() if c.name == "rr")
-        assert {c.name for c in rr.commands} == {"status", "job", "recompute", "find", "lookup", "ingest", "drive", "uuidranks", "claims", "approve", "reject", "link-old"}
+        assert {c.name for c in rr.commands} == {"status", "job", "recompute", "find", "lookup", "ingest", "drive", "uuidranks", "unresolved", "setuuid", "skipname", "claims", "approve", "reject", "link-old"}
         assert {c.name for c in bot.tree.get_commands(type=AppCommandType.user)} == {"Rank lookup"}
         assert {c.name for c in bot.tree.get_commands(type=AppCommandType.message)} == {"Submit screenshots"}
         submit = next(c for c in bot.tree.get_commands() if c.name == "submit")

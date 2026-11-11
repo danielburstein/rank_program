@@ -38,6 +38,7 @@ from rankrecovery.services.players import (
 )
 
 log = logging.getLogger(__name__)
+REVIEW_SKIP_FLAG = "IDENTITY_REVIEW_SKIPPED"
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -560,6 +561,151 @@ class IdentityService:
                 raise KeyError(f"no evidence recorded for old name {old_username!r}")
             player_id = player.id
         return self.link_names(player_id, result.uuid, result.current_name or current_username, actor=actor, source="staff_link", note=note, force=force)
+
+    # ------------------------------------------------------------ manual review
+    def review_queue(self, *, limit: int = 5, offset: int = 0, include_skipped: bool = False, search: str = "") -> dict[str, Any]:
+        """Names without a UUID for staff to settle by hand, highest rank first.
+
+        Each item carries what is known (ranks, screenshots, aliases, why the
+        lookup failed, candidate accounts for ambiguous names) and a NameMC
+        search link. Names staff skipped are left out unless asked for.
+        """
+        from urllib.parse import quote
+
+        from rankrecovery.db.models import Flag, PlayerAlias
+
+        policy = self.ctx.policy()
+        needle = search.strip().lower()
+        with self.ctx.db.read_session() as s:
+            skipped = {int(f.entity_id) for f in s.execute(select(Flag).where(Flag.entity_type == "player", Flag.code == REVIEW_SKIP_FLAG, Flag.is_active.is_(True))).scalars()}
+            rows = s.execute(select(Player, PlayerSummary).outerjoin(PlayerSummary, PlayerSummary.player_id == Player.id).where(Player.merged_into_id.is_(None), Player.canonical_uuid.is_(None))).all()
+            ids = [p.id for p, _ in rows]
+            aliases: dict[int, set[str]] = {}
+            notes: dict[int, str] = {}
+            candidates: dict[int, list[dict[str, Any]]] = {}
+            if ids:
+                for pid, username in s.execute(select(PlayerAlias.player_id, PlayerAlias.username).where(PlayerAlias.player_id.in_(ids))).all():
+                    aliases.setdefault(pid, set()).add(username)
+                for r in s.execute(select(IdentityResolution).where(IdentityResolution.player_id.in_(ids), IdentityResolution.is_active.is_(True)).order_by(IdentityResolution.id)).scalars():
+                    if r.uuid and r.status == IdentityStatus.AMBIGUOUS.value:
+                        candidates.setdefault(r.player_id, []).append({"uuid": r.uuid, "current_name": r.current_name, "note": r.note})
+                    elif r.note:
+                        notes[r.player_id] = r.note
+            items: list[dict[str, Any]] = []
+            for p, ps in rows:
+                is_skipped = p.id in skipped
+                if is_skipped and not include_skipped:
+                    continue
+                names = sorted(aliases.get(p.id, set()) | {p.display_name}, key=str.lower)
+                if needle and not any(needle in n.lower() for n in names):
+                    continue
+                best = (ps.effective_rank or ps.highest_observed) if ps is not None else None
+                items.append(
+                    {
+                        "player_id": p.id,
+                        "name": p.display_name,
+                        "aliases": names,
+                        "effective_rank": ps.effective_rank if ps is not None else None,
+                        "highest_observed": ps.highest_observed if ps is not None else None,
+                        "provisional": [x.get("rank") if isinstance(x, dict) else x for x in ((ps.provisional if ps is not None else None) or [])],
+                        "identity_status": p.identity_status,
+                        "why": notes.get(p.id, ""),
+                        "candidates": candidates.get(p.id, []),
+                        "is_bedrock": bool(p.is_bedrock),
+                        "images": int(ps.clean_rank_images) if ps is not None else 0,
+                        "skipped": is_skipped,
+                        "namemc_url": f"https://namemc.com/search?q={quote(p.display_name, safe='')}",
+                        "_priority": policy.priority(best),
+                    }
+                )
+        items.sort(key=lambda it: (-int(it["_priority"]), str(it["name"]).lower()))
+        for it in items:
+            it.pop("_priority", None)
+        return {"total": len(items), "items": items[offset : offset + limit]}
+
+    def resolve_manually(self, player_id: int, uuid: str, *, actor: str, note: str = "", verify: bool = True, provider: Any | None = None) -> dict[str, Any]:
+        """Staff found the account on NameMC: store the UUID, confirm the current name with Mojang, recompute."""
+        from rankrecovery.core.identity import is_floodgate_uuid
+        from rankrecovery.db.models import Flag
+
+        norm = normalise_uuid(uuid)
+        if norm is None:
+            raise ValueError("that is not a UUID (expected 32 hex characters, dashes optional)")
+        self.set_manual_uuid(player_id, norm, actor=actor, reason=note or "set by hand (NameMC)")
+        current_name: str | None = None
+        verified = False
+        message = ""
+        if verify and not is_floodgate_uuid(norm):
+            try:
+                if provider is None:
+                    from rankrecovery.identity.providers import MojangProfileProvider
+
+                    provider = MojangProfileProvider(self.ctx.settings.get_all(include_secrets=True))
+                result = provider.lookup(norm)
+                if result.resolved and result.current_name:
+                    current_name, verified = result.current_name, True
+                else:
+                    message = result.message or "Mojang has no profile for that UUID"
+            except Exception as exc:  # noqa: BLE001 - the UUID is stored either way; the check is advisory
+                message = f"could not check the UUID with Mojang: {exc}"
+        with self.ctx.db.write_session() as s:
+            player = resolve_survivor(s, s.get(Player, player_id))
+            survivor_id = player.id
+            if current_name:
+                player.current_name = current_name
+                add_alias(s, player, current_name, source="mojang_profile")
+            for f in s.execute(select(Flag).where(Flag.entity_type == "player", Flag.entity_id.in_([player_id, survivor_id]), Flag.code == REVIEW_SKIP_FLAG, Flag.is_active.is_(True))).scalars():
+                f.is_active = False
+                f.resolved_at = datetime.now(UTC)
+                f.resolved_by = actor
+                f.resolution_note = "UUID set by hand"
+        from rankrecovery.services.conversion import ConversionService
+        from rankrecovery.services.playerview import PlayerViewService
+        from rankrecovery.services.reconcile import ReconcileService
+        from rankrecovery.services.uuidranks import refresh_uuid_ranks
+
+        ReconcileService(self.ctx).recompute_player(survivor_id)
+        ConversionService(self.ctx).recompute([survivor_id])
+        refresh_uuid_ranks(self.ctx, actor=actor)
+        detail = PlayerViewService(self.ctx).detail(survivor_id) or {}
+        summary = detail.get("summary") or {}
+        conversion = detail.get("conversion") or {}
+        return {
+            "player_id": survivor_id,
+            "uuid": norm,
+            "current_name": current_name,
+            "verified": verified,
+            "message": message,
+            "display_name": (detail.get("player") or {}).get("display_name"),
+            "effective_rank": summary.get("effective_rank"),
+            "new_rank": conversion.get("new_rank") if isinstance(conversion, dict) else None,
+        }
+
+    def skip_identity_review(self, player_id: int, *, actor: str, reason: str = "") -> None:
+        """Staff could not find the account; keep the name out of the review queue (its record is untouched)."""
+        with self.ctx.db.write_session() as s:
+            player = s.get(Player, player_id)
+            if player is None:
+                raise KeyError(player_id)
+            upsert_flags(s, "player", player_id, [FlagInstance(REVIEW_SKIP_FLAG, reason or "skipped in manual review")], actor=actor, source="manual")
+            audit(s, actor=actor, action="identity.review_skipped", entity_type="player", entity_id=player_id, note=reason)
+
+    def unskip_identity_review(self, player_id: int, *, actor: str) -> int:
+        from rankrecovery.db.models import Flag
+
+        with self.ctx.db.write_session() as s:
+            if s.get(Player, player_id) is None:
+                raise KeyError(player_id)
+            n = 0
+            for f in s.execute(select(Flag).where(Flag.entity_type == "player", Flag.entity_id == player_id, Flag.code == REVIEW_SKIP_FLAG, Flag.is_active.is_(True))).scalars():
+                f.is_active = False
+                f.resolved_at = datetime.now(UTC)
+                f.resolved_by = actor
+                f.resolution_note = "back in the manual review queue"
+                n += 1
+            if n:
+                audit(s, actor=actor, action="identity.review_unskipped", entity_type="player", entity_id=player_id)
+            return n
 
     # ----------------------------------------------------- server-record import
     def import_identity_records(self, content: bytes, *, filename: str, actor: str, create_missing: bool = False) -> dict[str, Any]:

@@ -127,3 +127,16 @@ purchase record, or an explicitly audited waiver).
 groups in LuckPerms, including staff groups. The export page shows which
 included players have staff evidence and refuses to write the file until the
 warning is acknowledged. The client never runs commands against a server.
+
+## Mode 3 · Set UUIDs by hand
+
+The lookups leave some names unresolved: nobody holds the name today and no
+public record says who did. This page shows those names a few at a time,
+highest rank first, with what is known about each (ranks, screenshots, other
+spellings, why the lookup failed, candidate accounts when several accounts
+used the name). **Open on NameMC** opens the search in your browser; paste the
+UUID into the field and press **Set UUID**. The server stores it, asks Mojang
+for the account's current name, recomputes the rank and refreshes the
+`uuid_ranks` table, and the card shows the result. **Skip** keeps a name that
+is plainly a misread out of the queue (the console's `skip-name <name> --undo`
+brings it back). When every card on the page is done the next batch loads.

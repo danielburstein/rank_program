@@ -118,6 +118,15 @@ with the link" into the same folder and submits them. Without an API key the
 Drive page lists at most 50 files per folder; set `drive.api_key` to a Google
 API key with the Drive API enabled for bigger folders.
 
+## Names the lookups cannot settle
+
+What is left after the automatic lookup is shown for manual review, highest
+rank first, with a NameMC link per name: `/rr unresolved` in Discord (buttons
+to set the UUID or skip the name), the client's "Set UUIDs by hand" page, or
+`unresolved` / `set-uuid` / `skip-name` in the console. Setting a UUID stores
+it, confirms the account's current name with Mojang, recomputes the rank and
+refreshes `uuid_ranks`; skipping keeps a misread name out of the queue.
+
 ## Old usernames that have since changed
 
 The UUID lookup (`lookup` in the panel console, `/rr lookup` in Discord, or

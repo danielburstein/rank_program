@@ -223,6 +223,15 @@ class LinkNames(BaseModel):
     force: bool = False
 
 
+class ReviewUuid(BaseModel):
+    uuid: str = Field(min_length=32, max_length=36)
+    note: str = ""
+
+
+class ReviewSkip(BaseModel):
+    reason: str = ""
+
+
 class IngestFolderBody(BaseModel):
     submitter: str | None = None
     extract: bool = True

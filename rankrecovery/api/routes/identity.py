@@ -4,7 +4,16 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from rankrecovery.api.auth import Principal, require
 from rankrecovery.api.routes._common import bad_request, ctx_of, not_found, runner_of
-from rankrecovery.api.schemas import ClaimCreate, ClaimDecision, LinkNames, LookupRequest, MergeRequest, Note
+from rankrecovery.api.schemas import (
+    ClaimCreate,
+    ClaimDecision,
+    LinkNames,
+    LookupRequest,
+    MergeRequest,
+    Note,
+    ReviewSkip,
+    ReviewUuid,
+)
 from rankrecovery.core.enums import ApiRole
 from rankrecovery.services.identity import IdentityService
 
@@ -15,6 +24,39 @@ router = APIRouter(tags=["identity"])
 def lookup(body: LookupRequest, request: Request, principal: Principal = Depends(require(ApiRole.STAFF))) -> dict:
     job_id = runner_of(request).submit("lookup_uuids", body.model_dump(), label="UUID lookup", created_by=principal.name)
     return {"job_id": job_id}
+
+
+@router.get("/identity/review-queue")
+def review_queue(request: Request, limit: int = 5, offset: int = 0, include_skipped: bool = False, search: str = "", _: Principal = Depends(require(ApiRole.STAFF))) -> dict:
+    return IdentityService(ctx_of(request)).review_queue(limit=max(1, min(limit, 100)), offset=max(0, offset), include_skipped=include_skipped, search=search)
+
+
+@router.post("/identity/review-queue/{player_id}/uuid")
+def review_set_uuid(player_id: int, body: ReviewUuid, request: Request, principal: Principal = Depends(require(ApiRole.STAFF))) -> dict:
+    try:
+        return IdentityService(ctx_of(request)).resolve_manually(player_id, body.uuid, actor=principal.name, note=body.note)
+    except KeyError as exc:
+        raise not_found("player") from exc
+    except ValueError as exc:
+        raise bad_request(exc) from exc
+
+
+@router.post("/identity/review-queue/{player_id}/skip")
+def review_skip(player_id: int, body: ReviewSkip, request: Request, principal: Principal = Depends(require(ApiRole.STAFF))) -> dict:
+    try:
+        IdentityService(ctx_of(request)).skip_identity_review(player_id, actor=principal.name, reason=body.reason)
+    except KeyError as exc:
+        raise not_found("player") from exc
+    return {"ok": True, "player_id": player_id}
+
+
+@router.post("/identity/review-queue/{player_id}/unskip")
+def review_unskip(player_id: int, request: Request, principal: Principal = Depends(require(ApiRole.STAFF))) -> dict:
+    try:
+        n = IdentityService(ctx_of(request)).unskip_identity_review(player_id, actor=principal.name)
+    except KeyError as exc:
+        raise not_found("player") from exc
+    return {"ok": True, "player_id": player_id, "reopened": n}
 
 
 @router.get("/identity")

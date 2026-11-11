@@ -90,6 +90,61 @@ class AdminCog(commands.Cog, name="Admin"):
         job_id = job.get("job_id")
         await interaction.followup.send(f"Queued UUID lookup as job #{job_id}. Players who already have a UUID are skipped; each remaining old name is checked against Mojang first, and names nobody holds today go to the most recent account that used them. Follow it with `/rr job {job_id}`.")
 
+    @rr.command(name="unresolved", description="Names without a UUID to settle by hand: NameMC links plus Set UUID and Skip buttons")
+    @app_commands.describe(count="How many names to show (1-5)", include_skipped="Also show names staff already skipped")
+    @staff_only()
+    async def unresolved(self, interaction: discord.Interaction, count: app_commands.Range[int, 1, 5] = 3, include_skipped: bool = False) -> None:
+        from rankrecovery.bot.views import UnresolvedView, unresolved_text
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            data = await api_of(interaction).review_queue(limit=int(count), include_skipped=include_skipped)
+        except ApiError as exc:
+            await interaction.followup.send(f"Could not load the queue: {exc.message}")
+            return
+        items = list(data.get("items") or [])
+        if not items:
+            await interaction.followup.send("Nothing left to review: every name has a UUID or was skipped.")
+            return
+        header = f"{data.get('total', len(items))} name(s) waiting. Look each one up on NameMC, press its button and paste the UUID; Skip the ones that are plainly misreads."
+        await interaction.followup.send(f"{header}\n{unresolved_text(items)}"[:1900], view=UnresolvedView(items), ephemeral=True)
+
+    @rr.command(name="setuuid", description="Give a name its UUID by hand (looked up on NameMC); Mojang confirms the current name")
+    @app_commands.describe(username="The username as recorded in the screenshots", uuid="The account's UUID", note="Optional note")
+    @staff_only()
+    async def setuuid(self, interaction: discord.Interaction, username: str, uuid: str, note: str | None = None) -> None:
+        from rankrecovery.bot.views import result_text
+
+        await interaction.response.defer(ephemeral=True)
+        api = api_of(interaction)
+        try:
+            detail = await api.player_by_name(username.strip())
+            if detail is None:
+                await interaction.followup.send(not_found_text(username))
+                return
+            result = await api.review_set_uuid(int(detail["player"]["player_id"]), uuid.strip(), note=(note or "").strip() or f"set via Discord by {interaction.user}")
+        except ApiError as exc:
+            await interaction.followup.send(f"Could not set the UUID: {exc.message}")
+            return
+        await interaction.followup.send(result_text(username.strip(), result))
+
+    @rr.command(name="skipname", description="Mark a name as not findable by hand so it leaves the review queue")
+    @app_commands.describe(username="The username as recorded", reason="Why (optional)")
+    @staff_only()
+    async def skipname(self, interaction: discord.Interaction, username: str, reason: str | None = None) -> None:
+        await interaction.response.defer(ephemeral=True)
+        api = api_of(interaction)
+        try:
+            detail = await api.player_by_name(username.strip())
+            if detail is None:
+                await interaction.followup.send(not_found_text(username))
+                return
+            await api.review_skip(int(detail["player"]["player_id"]), reason=(reason or "").strip() or f"skipped via Discord by {interaction.user}")
+        except ApiError as exc:
+            await interaction.followup.send(f"Could not skip it: {exc.message}")
+            return
+        await interaction.followup.send(f"Skipped **{discord.utils.escape_markdown(username.strip())}**; it stays out of the queue until un-skipped.")
+
     @rr.command(name="uuidranks", description="Rebuild the uuid_ranks table: one row per resolved UUID with its highest rank")
     @staff_only()
     async def uuidranks(self, interaction: discord.Interaction) -> None:

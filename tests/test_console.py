@@ -81,6 +81,20 @@ def test_console_commands(tmp_path):
         assert "not a Google Drive" in console.run("drive https://example.com/x")
         assert console.run("lookup").startswith("queued job #")
         assert "uuid_ranks rebuilt: 1 uuid(s)" in console.run("uuid-ranks")  # Player123 got its UUID from the identity import above
+        assert "nothing left to review" in console.run("unresolved")
+        ImageService(ctx).import_bytes(png_bytes(2), filename="a.png", submitter_name="bob")  # identical content: no new player
+        from rankrecovery.services.players import get_or_create_player
+
+        with ctx.db.write_session() as s:
+            get_or_create_player(s, "Ghosty")
+        assert "Ghosty" in console.run("unresolved") and "namemc.com/search?q=Ghosty" in console.run("unresolved 5")
+        assert "skipped" in console.run("skip-name Ghosty garbled")
+        assert "nothing left to review" in console.run("unresolved")
+        assert "(skipped)" in console.run("unresolved --skipped")
+        assert "back in the review queue" in console.run("skip-name Ghosty --undo")
+        assert "usage" in console.run("set-uuid Ghosty")
+        assert "not a UUID" in console.run("set-uuid Ghosty nope")
+        assert "no such player" in console.run("set-uuid Nobody 069a79f444e94726a5befca90e38aaf5")
         assert "069a79f4-44e9-4726-a5be-fca90e38aaf5  HERO" in console.run("uuid-ranks list")
         assert "wrote 1 row(s)" in console.run(f'uuid-ranks csv "{tmp_path / "uuid_ranks.csv"}"')
         assert (tmp_path / "uuid_ranks.csv").read_text().startswith("uuid,current_name,highest_rank")

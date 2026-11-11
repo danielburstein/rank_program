@@ -36,6 +36,7 @@ PAGES: list[tuple[str, str, str]] = [
     ("csv", "Trusted CSV", "rankrecovery.client.pages.csv_page:CsvPage"),
     ("conversion", "Mode 2 · Conversion", "rankrecovery.client.pages.conversion:ConversionPage"),
     ("identity", "Mode 3 · Identities", "rankrecovery.client.pages.identity:IdentityPage"),
+    ("identity_review", "Mode 3 · Set UUIDs by hand", "rankrecovery.client.pages.identity_review:IdentityReviewPage"),
     ("export", "Mode 4 · Export", "rankrecovery.client.pages.export:ExportPage"),
     ("search", "Mode 5 · Search", "rankrecovery.client.pages.search:SearchPage"),
     ("rescan", "Mode 6 · Rescan", "rankrecovery.client.pages.rescan:RescanPage"),

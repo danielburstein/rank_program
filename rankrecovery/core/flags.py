@@ -48,6 +48,7 @@ _DEFINITIONS: list[FlagDefinition] = [
     FlagDefinition("IDENTITY_AMBIGUOUS", Severity.ERROR, "The identity could not be resolved to a single UUID."),
     FlagDefinition("IDENTITY_CLAIM_PENDING", Severity.INFO, "A player claims this old name as their current account; staff approval pending.", False),
     FlagDefinition("IDENTITY_NAME_REUSED", Severity.INFO, "Several accounts have used this name; the most recent holder was taken automatically.", False),
+    FlagDefinition("IDENTITY_REVIEW_SKIPPED", Severity.INFO, "Staff could not find this name's account by hand; it is left out of the manual review queue.", False),
     FlagDefinition("DUPLICATE_IMAGE", Severity.INFO, "Image content duplicates another imported image.", False),
     FlagDefinition("NEAR_DUPLICATE_IMAGE", Severity.WARNING, "Image is perceptually similar to another image; review whether it is the same capture."),
     FlagDefinition("NAME_FOUND_RANK_UNREADABLE", Severity.WARNING, "Rescan found the username but the rank could not be read."),
