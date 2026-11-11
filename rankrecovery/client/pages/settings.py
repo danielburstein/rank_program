@@ -69,6 +69,8 @@ LABELS = {
     "lookup.rate_limit_max_cooldown_seconds": "Longest single rate-limit pause",
     "lookup.rate_limit_max_retries": "429s tolerated for one request before it is reported failed",
     "lookup.burst": "Requests that may go out back to back before pacing applies",
+    "lookup.outage_threshold": "Consecutive outage errors (5xx, timeouts) before a provider is skipped for a while",
+    "lookup.outage_cooldown_seconds": "How long a provider stays skipped after tripping the outage threshold",
     "verification.require_two_submitters_above_immortal": "Require 2 independent submitters for ranks above IMMORTAL",
     "csv.treat_as_confirmed_exempt_from_verification": "Treat trusted purchase CSV records as confirmed and exempt from submitter verification",
     "dates.exclude_out_of_date_from_eligibility": "Exclude OUT_OF_DATE evidence from rank eligibility (unchecked = flag only)",

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import threading
 import time
 from collections.abc import Callable, Iterable, MutableMapping
@@ -37,6 +38,8 @@ from rankrecovery.identity.ratelimit import RateLimitCancelled, RateLimiter
 
 CacheKey = tuple[str, str]
 log = logging.getLogger(__name__)
+JAVA_NAME = re.compile(r"[A-Za-z0-9_]{1,16}")
+OUTAGE_CODES = frozenset({F.API_UNAVAILABLE, F.HTTP_SERVER_ERROR, F.CONNECTION_ERROR, F.CONNECTION_TIMEOUT, F.READ_TIMEOUT, F.DNS_ERROR})
 
 
 class LookupService:
@@ -59,6 +62,7 @@ class LookupService:
         self.cache = cache if cache is not None else {}
         self._cache_lock = threading.Lock()
         self._prefetched: dict[CacheKey, LookupResult] = {}  # answers from a bulk request, handed to the next single lookup of that name
+        self._outages: dict[str, dict[str, float]] = {}  # provider -> consecutive outage failures and when its breaker closes again
         self._clock = clock
         self._sleep = sleep
         self._rng = rng
@@ -91,6 +95,39 @@ class LookupService:
     @property
     def rate_limit_cooldown(self) -> float:
         return max(0.0, float(self.settings.get("lookup.rate_limit_cooldown_seconds", 10)))
+
+    @property
+    def outage_threshold(self) -> int:
+        return max(1, int(self.settings.get("lookup.outage_threshold", 5)))
+
+    @property
+    def outage_cooldown(self) -> float:
+        return max(1.0, float(self.settings.get("lookup.outage_cooldown_seconds", 120)))
+
+    # --------------------------------------------------------------- breaker
+    def _outage_open(self, provider: str) -> dict[str, float] | None:
+        """The provider's breaker state when it is open (recent consecutive outage failures), else None."""
+        with self._cache_lock:
+            state = self._outages.get(provider)
+            if state and state.get("open_until", 0.0) > self._clock():
+                return dict(state)
+        return None
+
+    def _note_outcome(self, provider: str, code: str | None, *, ok: bool) -> None:
+        with self._cache_lock:
+            if ok or code not in OUTAGE_CODES:
+                if ok:
+                    self._outages.pop(provider, None)
+                return
+            state = self._outages.setdefault(provider, {"failures": 0.0, "open_until": 0.0})
+            state["failures"] += 1
+            if state["failures"] >= self.outage_threshold:
+                state["open_until"] = self._clock() + self.outage_cooldown
+                if state["failures"] == self.outage_threshold:
+                    log.warning("%s answered %d outage errors in a row (%s); skipping it for %.0fs so the run does not stall", provider, int(state["failures"]), code, self.outage_cooldown)
+
+    def _outage_result(self, username: str, provider: str, state: dict[str, float]) -> LookupResult:
+        return LookupResult(queried_name=username, provider=provider, outcome=LookupOutcome.FAILED, failure_code=F.API_UNAVAILABLE, message=f"{provider} is unavailable ({int(state['failures'])} consecutive failures); skipped without a request, retry later with lookup --retry-failed")
 
     @property
     def rate_limit_max_cooldown(self) -> float:
@@ -178,6 +215,8 @@ class LookupService:
                 )
             return self._resolve_with(provider, username, force=force, cancel=cancel)
 
+        if not JAVA_NAME.fullmatch(username):
+            return LookupResult(queried_name=username, provider="validation", outcome=LookupOutcome.NOT_FOUND, failure_code=F.HISTORICAL_NAME_UNRESOLVED, message=f"{username!r} cannot be a Java username (letters, digits and _ only, 1-16 characters); probably a chat line or a bot, not looked up")
         provider = self.java_provider()
         current = self._resolve_with(provider, username, force=force, cancel=cancel)
         historical = self.historical_provider()
@@ -273,6 +312,9 @@ class LookupService:
             attempt_no += 1
             if cancel is not None and cancel.is_set():
                 return self._cancelled(username, name, attempts)
+            outage = self._outage_open(name)
+            if outage is not None:
+                return self._outage_result(username, name, outage) if last is None else self._finalise_outage(username, name, attempts, outage)
             try:
                 self.rate_limiter.acquire(name, cancel)
             except RateLimitCancelled as exc:
@@ -288,6 +330,7 @@ class LookupService:
             attempts.extend(result.attempts)
             last = result
             code = result.failure_code
+            self._note_outcome(name, code, ok=result.outcome in (LookupOutcome.RESOLVED, LookupOutcome.NOT_FOUND))
 
             if result.outcome in (LookupOutcome.RESOLVED, LookupOutcome.NOT_FOUND):
                 self.proxy_pool.mark_success(proxy)
@@ -347,6 +390,11 @@ class LookupService:
             )
         last.attempts = attempts
         return last
+
+    def _finalise_outage(self, username: str, provider: str, attempts: list[LookupAttempt], state: dict[str, float]) -> LookupResult:
+        result = self._outage_result(username, provider, state)
+        result.attempts = attempts
+        return result
 
     def _rate_limit_pause(self, hit_no: int, retry_after: float | None) -> float:
         """How long to pause after the ``hit_no``-th 429 for one request: the server's Retry-After the first time, then doubling."""
@@ -441,8 +489,8 @@ class LookupService:
         for raw in names:
             n = raw.strip()
             key = n.lower()
-            if not n or key in seen:
-                continue
+            if not n or key in seen or not JAVA_NAME.fullmatch(n):
+                continue  # one impossible name would fail the whole batch; resolve() answers it without a request
             seen.add(key)
             if not force and self._cache_get(pname, n) is not None:
                 continue
@@ -477,6 +525,8 @@ class LookupService:
             attempt_no += 1
             if cancel is not None and cancel.is_set():
                 return None
+            if self._outage_open(name) is not None:
+                return None
             try:
                 self.rate_limiter.acquire(name, cancel)
             except RateLimitCancelled:
@@ -488,8 +538,10 @@ class LookupService:
             results, attempt, retry_after = provider.attempt_bulk(chunk, attempt_no=attempt_no, proxy=proxy)
             if results is not None:
                 self.proxy_pool.mark_success(proxy)
+                self._note_outcome(name, None, ok=True)
                 return results
             code = attempt.failure_code
+            self._note_outcome(name, code, ok=False)
             if code == F.RATE_LIMITED:
                 rate_hits += 1
                 pause = self._rate_limit_pause(rate_hits, retry_after)

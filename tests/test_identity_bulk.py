@@ -177,6 +177,40 @@ def test_bulk_repeated_429_escalates_then_falls_back_to_single_lookups():
     assert [s for s in h.sleeps if s >= 5][:1] == [5.0]
 
 
+def test_provider_outage_trips_a_breaker_instead_of_retrying_every_name():
+    h = Harness(lambda r: httpx.Response(503), {"lookup.bulk_lookups": False, "lookup.max_retries": 0, "lookup.outage_threshold": 3, "lookup.outage_cooldown_seconds": 60})
+    results = h.service.resolve_many([f"Name{i}" for i in range(8)], workers=1)
+    assert len(h.gets) == 3  # the fourth name onwards never reached the network
+    assert all(r.outcome == LookupOutcome.FAILED and r.failure_code == F.API_UNAVAILABLE for r in results)
+    assert "skipped without a request" in results[-1].message and "retry-failed" in results[-1].message
+    h.clock.now += 61  # cool-down over: the breaker lets a request through again
+    h.service.resolve("Another")
+    assert len(h.gets) == 4
+
+
+def test_breaker_resets_on_success():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(503) if calls["n"] <= 2 else bulk_handler(request)
+
+    h = Harness(handler, {"lookup.bulk_lookups": False, "lookup.max_retries": 0, "lookup.outage_threshold": 3})
+    assert h.service.resolve("Alpha").outcome == LookupOutcome.FAILED
+    assert h.service.resolve("Beta").outcome == LookupOutcome.FAILED
+    assert h.service.resolve("Alpha").resolved  # third call succeeds and clears the count
+    assert h.service._outages == {}
+
+
+def test_impossible_java_names_are_answered_without_a_request():
+    h = Harness(bulk_handler)
+    r = h.service.resolve("FredBoat♪♪")
+    assert r.outcome == LookupOutcome.NOT_FOUND and r.failure_code == F.HISTORICAL_NAME_UNRESOLVED and "cannot be a Java username" in r.message and not h.requests
+    results = h.service.resolve_many(["Alpha", "FredBoat♪♪", "way_too_long_for_minecraft"], workers=2)
+    assert results[0].resolved and results[1].outcome == LookupOutcome.NOT_FOUND and results[2].outcome == LookupOutcome.NOT_FOUND
+    assert len(h.posts) == 1 and json.loads(h.posts[0].content) == ["Alpha"]  # junk never enters a bulk request
+
+
 def test_rate_limiter_penalise_blocks_until_the_cooldown_passes():
     clock = FakeClock()
     sleeps: list[float] = []

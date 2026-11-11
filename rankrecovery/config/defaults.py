@@ -171,7 +171,9 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "lookup.burst": 10,  # requests that may go out back to back before pacing applies (a fresh limiter used to release a whole minute at once)
     "lookup.rate_limit_cooldown_seconds": 10,  # first pause after a 429 without a Retry-After; doubles on every further 429 for the same request
     "lookup.rate_limit_max_cooldown_seconds": 300,  # longest single pause
-    "lookup.rate_limit_max_retries": 10,  # 429s tolerated for one request before it is reported as failed (technical failures use lookup.max_retries)
+    "lookup.rate_limit_max_retries": 10,
+    "lookup.outage_threshold": 5,  # consecutive 5xx/connection failures after which a provider is skipped for a while instead of retried per name
+    "lookup.outage_cooldown_seconds": 120,  # 429s tolerated for one request before it is reported as failed (technical failures use lookup.max_retries)
     "lookup.bedrock_provider": "geyser",
     "lookup.geyser_url": "https://api.geysermc.org/v2/utils/uuid/bedrock_or_java/{name}?prefix={prefix}",
     "lookup.bedrock_prefix": ".",
